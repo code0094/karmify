@@ -3,7 +3,6 @@
 from datetime import datetime
 
 from sqlalchemy import select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import GenreAlias, GenrePlaylist, LikedTrack, SpotifyAccount

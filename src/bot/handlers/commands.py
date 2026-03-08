@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from src.db.models import LikedTrack
 
@@ -51,7 +51,6 @@ def setup_command_router(session_factory: async_sessionmaker[AsyncSession]) -> R
 
     @router.message(Command("stats"))
     async def handle_stats(message: Message) -> None:
-        # Parse period from args
         days = 7
         if message.text:
             parts = message.text.strip().split()
@@ -62,44 +61,61 @@ def setup_command_router(session_factory: async_sessionmaker[AsyncSession]) -> R
                 elif arg.isdigit():
                     days = int(arg)
 
-        async with session_factory() as session:
-            query = select(LikedTrack)
-            if days > 0:
-                since = datetime.now(tz=UTC) - timedelta(days=days)
-                query = query.where(LikedTrack.created_at >= since)
-
-            result = await session.execute(query)
-            tracks = list(result.scalars().all())
-
-        total = len(tracks)
-        if total == 0:
-            period_label = f"last {days} days" if days > 0 else "all time"
-            await message.answer(f"📊 Нет данных за {period_label}")
-            return
-
-        # Count per user
-        by_user: dict[str, int] = {}
-        auto_count = 0
-        manual_count = 0
-        genre_counts: dict[str, int] = {}
-
-        for t in tracks:
-            by_user[t.liked_by] = by_user.get(t.liked_by, 0) + 1
-            if t.genre_source and t.genre_source != "manual":
-                auto_count += 1
-            else:
-                manual_count += 1
-            if t.detected_genre:
-                genre_counts[t.detected_genre] = genre_counts.get(t.detected_genre, 0) + 1
-
-        # Format
         period_label = f"last {days} days" if days > 0 else "all time"
-        user_parts = " | ".join(f"{u}: {c}" for u, c in sorted(by_user.items()))
+        since = datetime.now(tz=UTC) - timedelta(days=days) if days > 0 else None
+
+        async with session_factory() as session:
+            # Base filter
+            base_filter = LikedTrack.created_at >= since if since else True
+
+            # Total count
+            total_q = select(func.count()).select_from(LikedTrack).where(base_filter)
+            total = (await session.execute(total_q)).scalar() or 0
+
+            if total == 0:
+                await message.answer(f"📊 Нет данных за {period_label}")
+                return
+
+            # Counts per user
+            user_q = (
+                select(LikedTrack.liked_by, func.count())
+                .where(base_filter)
+                .group_by(LikedTrack.liked_by)
+            )
+            user_rows = (await session.execute(user_q)).all()
+
+            # Auto vs manual count
+            auto_q = (
+                select(
+                    func.count().filter(
+                        LikedTrack.genre_source.notin_(["manual", None])
+                    ).label("auto"),
+                    func.count().filter(
+                        LikedTrack.genre_source.in_(["manual", None])
+                        | LikedTrack.genre_source.is_(None)
+                    ).label("manual"),
+                )
+                .select_from(LikedTrack)
+                .where(base_filter)
+            )
+            counts = (await session.execute(auto_q)).one()
+            auto_count, manual_count = counts.auto, counts.manual
+
+            # Top genres
+            genre_q = (
+                select(LikedTrack.detected_genre, func.count().label("cnt"))
+                .where(base_filter, LikedTrack.detected_genre.isnot(None))
+                .group_by(LikedTrack.detected_genre)
+                .order_by(func.count().desc())
+                .limit(5)
+            )
+            genre_rows = (await session.execute(genre_q)).all()
+
+        user_parts = " | ".join(f"{u}: {c}" for u, c in sorted(user_rows))
         auto_pct = round(auto_count / total * 100) if total > 0 else 0
 
-        top_genres = sorted(genre_counts.items(), key=lambda x: x[1], reverse=True)[:5]
         genre_lines = "\n".join(
-            f"  {i+1}. {g} — {c}" for i, (g, c) in enumerate(top_genres)
+            f"  {i + 1}. {g} — {c}" for i, (g, c) in enumerate(genre_rows)
         )
 
         text = (
