@@ -48,25 +48,12 @@ async def track_exists(session: AsyncSession, spotify_track_id: str, liked_by: s
 
 
 async def insert_liked_track(session: AsyncSession, track: LikedTrack) -> LikedTrack:
-    """Insert a new liked track (upsert — skip on conflict)."""
-    stmt = (
-        pg_insert(LikedTrack)
-        .values(
-            spotify_track_id=track.spotify_track_id,
-            track_name=track.track_name,
-            artist_name=track.artist_name,
-            liked_by=track.liked_by,
-            liked_at=track.liked_at,
-            detected_genre=track.detected_genre,
-            genre_source=track.genre_source,
-        )
-        .on_conflict_do_nothing(index_elements=["spotify_track_id", "liked_by"])
-        .returning(LikedTrack)
-    )
-    result = await session.execute(stmt)
+    """Insert a new liked track. Returns the inserted row with a valid DB id."""
+    session.add(track)
+    await session.flush()
     await session.commit()
-    row = result.scalar_one_or_none()
-    return row if row else track
+    await session.refresh(track)
+    return track
 
 
 async def assign_track_to_playlist(
