@@ -1,4 +1,10 @@
-"""Inline button callback handlers."""
+"""Inline button callback handlers.
+
+Callback data format:
+  a:{track_db_id}:{playlist_db_id}  — assign
+  e:{track_db_id}                   — expand
+  r:{track_db_id}                   — reassign
+"""
 
 from __future__ import annotations
 
@@ -28,7 +34,7 @@ def setup_callback_router(
 ) -> Router:
     """Create and return a router with callback handlers wired to dependencies."""
 
-    @router.callback_query(F.data.startswith("assign:"))
+    @router.callback_query(F.data.startswith("a:"))
     async def handle_assign(callback: CallbackQuery) -> None:
         """Handle playlist assignment button press."""
         if not callback.data or not callback.from_user:
@@ -36,11 +42,9 @@ def setup_callback_router(
 
         parts = callback.data.split(":")
         track_db_id = int(parts[1])
-        playlist_id = parts[2]
-        genre_key = parts[3]
+        playlist_db_id = int(parts[2])
 
         async with session_factory() as session:
-            # Lock the row to prevent concurrent assignment
             track = await repos.get_track_for_update(session, track_db_id)
 
             if not track:
@@ -51,6 +55,12 @@ def setup_callback_router(
                 await callback.answer("Трек уже назначен в плейлист", show_alert=True)
                 return
 
+            # Resolve playlist from DB ID
+            playlist = await repos.get_playlist_by_id(session, playlist_db_id)
+            if not playlist:
+                await callback.answer("Плейлист не найден", show_alert=True)
+                return
+
             client = spotify_clients.get(track.liked_by)
             if not client:
                 await callback.answer("Spotify client не найден", show_alert=True)
@@ -58,7 +68,7 @@ def setup_callback_router(
 
             sp = await client.get_client()
             added = await spotify_playlist.add_track_to_playlist(
-                sp, playlist_id, track.spotify_track_id
+                sp, playlist.playlist_id, track.spotify_track_id
             )
             if not added:
                 await callback.answer("Трек уже в этом плейлисте", show_alert=True)
@@ -68,12 +78,12 @@ def setup_callback_router(
             await repos.assign_track_to_playlist(
                 session,
                 track_db_id,
-                playlist_id,
+                playlist.playlist_id,
                 assigned_by,
                 callback.message.message_id if callback.message else None,
             )
 
-        await callback.answer(f"✅ Добавлено в {genre_key}!")
+        await callback.answer(f"✅ Добавлено в {playlist.display_name}!")
 
         if callback.message:
             await callback.message.edit_reply_markup(
@@ -83,12 +93,12 @@ def setup_callback_router(
         logger.info(
             "track.assigned",
             track_id=track.spotify_track_id,
-            playlist=playlist_id,
-            genre=genre_key,
+            playlist=playlist.playlist_id,
+            genre=playlist.genre_key,
             by=assigned_by,
         )
 
-    @router.callback_query(F.data.startswith("reassign:"))
+    @router.callback_query(F.data.startswith("r:"))
     async def handle_reassign(callback: CallbackQuery) -> None:
         """Handle reassign button — remove from current playlist, show full list."""
         if not callback.data:
@@ -115,12 +125,9 @@ def setup_callback_router(
             old_track_id = track.spotify_track_id
             old_liked_by = track.liked_by
 
-            # Clear assignment in DB (NULL, not empty strings)
             await repos.assign_track_to_playlist(session, track_db_id, None, None, None)
-
             playlists = await repos.get_all_playlists(session)
 
-        # Remove from Spotify playlist (outside DB transaction)
         client = spotify_clients.get(old_liked_by)
         if client:
             sp = await client.get_client()
@@ -133,7 +140,7 @@ def setup_callback_router(
 
         await callback.answer("Выбери новый плейлист")
 
-    @router.callback_query(F.data.startswith("expand:"))
+    @router.callback_query(F.data.startswith("e:"))
     async def handle_expand(callback: CallbackQuery) -> None:
         """Expand to show full playlist list."""
         if not callback.data:

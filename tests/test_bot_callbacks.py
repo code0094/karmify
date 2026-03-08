@@ -13,15 +13,16 @@ from src.db.models import GenrePlaylist, LikedTrack
 
 def test_genre_keyboard_marks_suggested(sample_playlists: list[GenrePlaylist]) -> None:
     """Suggested genre gets ✨ marker in keyboard."""
-    kb = build_genre_keyboard(track_db_id=1, playlists=sample_playlists, suggested_genre_key="hardgroove")
+    kb = build_genre_keyboard(
+        track_db_id=1, playlists=sample_playlists, suggested_genre_key="hardgroove"
+    )
 
-    # Find the hardgroove button
     found = False
     for row in kb.inline_keyboard:
         for btn in row:
             if "Hardgroove" in btn.text and "✨" in btn.text:
                 found = True
-                assert btn.callback_data and btn.callback_data.startswith("assign:1:")
+                assert btn.callback_data and btn.callback_data.startswith("a:1:")
 
     assert found, "Hardgroove button with ✨ not found"
 
@@ -33,7 +34,7 @@ def test_genre_keyboard_has_other_button(sample_playlists: list[GenrePlaylist]) 
     last_row = kb.inline_keyboard[-1]
     assert len(last_row) == 1
     assert "Другой" in last_row[0].text
-    assert last_row[0].callback_data == "expand:1"
+    assert last_row[0].callback_data == "e:1"
 
 
 def test_full_playlist_keyboard(sample_playlists: list[GenrePlaylist]) -> None:
@@ -41,7 +42,7 @@ def test_full_playlist_keyboard(sample_playlists: list[GenrePlaylist]) -> None:
     kb = build_full_playlist_keyboard(track_db_id=1, playlists=sample_playlists)
 
     all_buttons = [btn for row in kb.inline_keyboard for btn in row]
-    assert len(all_buttons) == 4  # All 4 playlists
+    assert len(all_buttons) == 4
 
 
 def test_reassign_keyboard() -> None:
@@ -50,7 +51,20 @@ def test_reassign_keyboard() -> None:
 
     assert len(kb.inline_keyboard) == 1
     assert kb.inline_keyboard[0][0].text == "↩️ Переназначить"
-    assert kb.inline_keyboard[0][0].callback_data == "reassign:42"
+    assert kb.inline_keyboard[0][0].callback_data == "r:42"
+
+
+def test_callback_data_within_64_bytes(sample_playlists: list[GenrePlaylist]) -> None:
+    """All callback_data strings must be <= 64 bytes (Telegram limit)."""
+    kb = build_genre_keyboard(
+        track_db_id=999999, playlists=sample_playlists, suggested_genre_key="hardgroove"
+    )
+    for row in kb.inline_keyboard:
+        for btn in row:
+            if btn.callback_data:
+                assert len(btn.callback_data.encode()) <= 64, (
+                    f"callback_data too long: {btn.callback_data!r}"
+                )
 
 
 def test_get_top_playlists_suggested_first(sample_playlists: list[GenrePlaylist]) -> None:

@@ -115,6 +115,11 @@ async def get_playlist_by_genre_key(
     return result.scalar_one_or_none()
 
 
+async def get_playlist_by_id(session: AsyncSession, playlist_id: int) -> GenrePlaylist | None:
+    """Get genre playlist by primary key."""
+    return await session.get(GenrePlaylist, playlist_id)
+
+
 async def get_track_by_id(session: AsyncSession, track_id: int) -> LikedTrack | None:
     """Get liked track by primary key."""
     return await session.get(LikedTrack, track_id)

@@ -1,4 +1,10 @@
-"""Inline keyboard builders for Telegram bot."""
+"""Inline keyboard builders for Telegram bot.
+
+Callback data format (max 64 bytes enforced by Telegram):
+  a:{track_db_id}:{playlist_db_id}  — assign track to playlist
+  e:{track_db_id}                   — expand full playlist list
+  r:{track_db_id}                   — reassign (undo + pick new)
+"""
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -25,7 +31,7 @@ def build_genre_keyboard(
         if pl.genre_key == suggested_genre_key:
             label += " ✨"
 
-        callback_data = f"assign:{track_db_id}:{pl.playlist_id}:{pl.genre_key}"
+        callback_data = f"a:{track_db_id}:{pl.id}"
         row.append(InlineKeyboardButton(text=label, callback_data=callback_data))
 
         if len(row) == 2:
@@ -35,11 +41,10 @@ def build_genre_keyboard(
     if row:
         buttons.append(row)
 
-    # "Другой..." button that expands full list (handled same way — all are shown)
     buttons.append([
         InlineKeyboardButton(
             text="📋 Другой...",
-            callback_data=f"expand:{track_db_id}",
+            callback_data=f"e:{track_db_id}",
         )
     ])
 
@@ -56,7 +61,7 @@ def build_full_playlist_keyboard(
 
     for pl in playlists:
         label = f"{pl.emoji} {pl.display_name}"
-        callback_data = f"assign:{track_db_id}:{pl.playlist_id}:{pl.genre_key}"
+        callback_data = f"a:{track_db_id}:{pl.id}"
         row.append(InlineKeyboardButton(text=label, callback_data=callback_data))
 
         if len(row) == 2:
@@ -76,7 +81,7 @@ def build_reassign_keyboard(track_db_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="↩️ Переназначить",
-                    callback_data=f"reassign:{track_db_id}",
+                    callback_data=f"r:{track_db_id}",
                 )
             ]
         ]
