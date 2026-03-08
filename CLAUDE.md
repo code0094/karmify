@@ -228,6 +228,68 @@ POLL_INTERVAL_SECONDS=30
 LOG_LEVEL=INFO
 ```
 
+## Additional Design Decisions
+
+### Artist Genre Cache
+Кэширование жанров на уровне **артиста**. Если ROD уже был определён как hardgroove,
+при следующем лайке трека ROD — берём жанр из кэша, не ходим в Discogs/Last.fm повторно.
+Экономит API-вызовы (особенно Discogs с лимитом 60 req/min) и ускоряет обработку.
+
+```sql
+CREATE TABLE artist_genre_cache (
+    id SERIAL PRIMARY KEY,
+    artist_name_normalized VARCHAR(500) UNIQUE NOT NULL,
+    genre_key VARCHAR(100) NOT NULL,
+    genre_source VARCHAR(20) NOT NULL,        -- 'spotify' | 'discogs' | 'lastfm'
+    cached_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '30 days'
+);
+```
+
+В `resolve_genre()` первым шагом — проверка кэша:
+```python
+cached = await artist_genre_cache.get(artist_name)
+if cached and not cached.is_expired():
+    return GenreResult(genre=cached.genre_key, source=f"{cached.genre_source}_cached")
+```
+
+### Retry & Circuit Breaker
+Для внешних API (Spotify, Discogs, Last.fm):
+- **Retry** с exponential backoff: 3 попытки, delays 1s → 2s → 4s
+- **Circuit breaker**: если API отдаёт 5 ошибок подряд — пропускаем этот уровень waterfall на 5 минут
+- Discogs: дополнительно respect `X-Discogs-Ratelimit-Remaining` header
+
+### Undo / Reassign
+Если трек добавлен не в тот плейлист, inline-кнопка `↩️ Переназначить` под сообщением.
+При нажатии — удаляет трек из текущего плейлиста, показывает полный список для выбора нового.
+Доступно в течение 24 часов после назначения.
+
+### /stats Command
+```
+📊 Статистика AUX MASTERS (last 7 days):
+├ Всего лайков: 42
+├ karma: 25 | stress303: 17
+├ Автоматически определено: 38 (90%)
+├ Вручную: 4
+└ Топ жанры:
+  1. 🔊 Hardgroove — 15
+  2. ⚡ Rave Techno — 9
+  3. 🔌 Electro — 7
+```
+Период: `/stats` (7 дней), `/stats 30` (30 дней), `/stats all`.
+
+### Health Check
+- Endpoint `/health` (aiohttp) для мониторинга:
+  - DB connection alive
+  - Spotify tokens valid (не expired)
+  - Last poll timestamp < 2 × POLL_INTERVAL
+- Docker HEALTHCHECK в Dockerfile
+
+### Graceful Shutdown
+- Обработка SIGTERM/SIGINT: корректное завершение polling loop
+- Ожидание текущих in-flight запросов (до 10s timeout)
+- Закрытие DB connections и aiohttp sessions
+
 ## Key Implementation Notes
 
 ### Spotify Token Refresh
