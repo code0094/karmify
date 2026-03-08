@@ -230,29 +230,6 @@ LOG_LEVEL=INFO
 
 ## Additional Design Decisions
 
-### Artist Genre Cache
-Кэширование жанров на уровне **артиста**. Если ROD уже был определён как hardgroove,
-при следующем лайке трека ROD — берём жанр из кэша, не ходим в Discogs/Last.fm повторно.
-Экономит API-вызовы (особенно Discogs с лимитом 60 req/min) и ускоряет обработку.
-
-```sql
-CREATE TABLE artist_genre_cache (
-    id SERIAL PRIMARY KEY,
-    artist_name_normalized VARCHAR(500) UNIQUE NOT NULL,
-    genre_key VARCHAR(100) NOT NULL,
-    genre_source VARCHAR(20) NOT NULL,        -- 'spotify' | 'discogs' | 'lastfm'
-    cached_at TIMESTAMPTZ DEFAULT NOW(),
-    expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '30 days'
-);
-```
-
-В `resolve_genre()` первым шагом — проверка кэша:
-```python
-cached = await artist_genre_cache.get(artist_name)
-if cached and not cached.is_expired():
-    return GenreResult(genre=cached.genre_key, source=f"{cached.genre_source}_cached")
-```
-
 ### Retry & Circuit Breaker
 Для внешних API (Spotify, Discogs, Last.fm):
 - **Retry** с exponential backoff: 3 попытки, delays 1s → 2s → 4s
