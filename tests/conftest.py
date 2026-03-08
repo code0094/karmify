@@ -1,0 +1,129 @@
+"""Shared test fixtures — mocks for Spotify, Discogs, Last.fm, DB."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from src.db.models import GenrePlaylist, LikedTrack
+
+
+@pytest.fixture
+def mock_spotify() -> MagicMock:
+    """Mock spotipy.Spotify client."""
+    sp = MagicMock()
+    sp.track.return_value = {
+        "id": "track123",
+        "name": "Akephale",
+        "artists": [{"id": "artist1", "name": "ROD"}],
+    }
+    sp.artists.return_value = {
+        "artists": [{"id": "artist1", "name": "ROD", "genres": ["hardgroove", "techno"]}]
+    }
+    sp.current_user_saved_tracks.return_value = {
+        "items": [
+            {
+                "added_at": "2026-03-08T12:00:00Z",
+                "track": {
+                    "id": "track123",
+                    "name": "Akephale",
+                    "artists": [{"name": "ROD"}],
+                },
+            }
+        ]
+    }
+    sp.playlist_tracks.return_value = {"items": []}
+    sp.playlist_add_items.return_value = None
+    return sp
+
+
+@pytest.fixture
+def mock_discogs() -> MagicMock:
+    """Mock discogs_client.Client."""
+    client = MagicMock()
+    result = MagicMock()
+    result.genres = ["Electronic"]
+    result.styles = ["Hardgroove", "Techno"]
+    result.labels = [MagicMock(name="Planet Rhythm")]
+    result.count = 1
+    search_results = MagicMock()
+    search_results.__getitem__ = MagicMock(return_value=result)
+    search_results.count = 1
+    client.search.return_value = search_results
+    return client
+
+
+@pytest.fixture
+def mock_lastfm() -> MagicMock:
+    """Mock pylast.LastFMNetwork."""
+    network = MagicMock()
+    tag1 = MagicMock()
+    tag1.item.get_name.return_value = "techno"
+    tag1.weight = 90
+    tag2 = MagicMock()
+    tag2.item.get_name.return_value = "hardgroove"
+    tag2.weight = 75
+    track = MagicMock()
+    track.get_top_tags.return_value = [tag1, tag2]
+    network.get_track.return_value = track
+    return network
+
+
+@pytest.fixture
+def sample_track() -> LikedTrack:
+    """Sample LikedTrack for testing."""
+    return LikedTrack(
+        id=1,
+        spotify_track_id="track123",
+        track_name="Akephale",
+        artist_name="ROD",
+        liked_by="karma",
+        liked_at=datetime(2026, 3, 8, 12, 0, tzinfo=UTC),
+    )
+
+
+@pytest.fixture
+def sample_playlists() -> list[GenrePlaylist]:
+    """Sample genre playlists."""
+    return [
+        GenrePlaylist(
+            id=1,
+            genre_key="hardgroove",
+            playlist_id="pl_hg",
+            display_name="Hardgroove",
+            emoji="🔊",
+        ),
+        GenrePlaylist(
+            id=2,
+            genre_key="acid",
+            playlist_id="pl_acid",
+            display_name="Acid",
+            emoji="🧪",
+        ),
+        GenrePlaylist(
+            id=3,
+            genre_key="jungle",
+            playlist_id="pl_jungle",
+            display_name="Jungle",
+            emoji="🌴",
+        ),
+        GenrePlaylist(
+            id=4,
+            genre_key="electro",
+            playlist_id="pl_electro",
+            display_name="Electro",
+            emoji="🔌",
+        ),
+    ]
+
+
+@pytest.fixture
+def mock_session_factory() -> AsyncMock:
+    """Mock async session factory."""
+    session = AsyncMock()
+    factory = AsyncMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    return factory
