@@ -1,5 +1,6 @@
 """Spotipy wrapper with DB-backed token refresh for multiple accounts."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import spotipy
@@ -46,7 +47,7 @@ class SpotifyClient:
 
     async def _refresh_and_store(self, refresh_token: str) -> str:
         """Refresh access token via Spotify and store new tokens in DB."""
-        token_info = self._oauth.refresh_access_token(refresh_token)
+        token_info = await asyncio.to_thread(self._oauth.refresh_access_token, refresh_token)
         access_token: str = token_info["access_token"]
         new_refresh: str = token_info.get("refresh_token", refresh_token)
         expires_at = datetime.now(tz=UTC) + timedelta(seconds=token_info["expires_in"])

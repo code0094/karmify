@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -37,7 +38,7 @@ async def poll_user_likes(
     new_count = 0
 
     while True:
-        results = sp.current_user_saved_tracks(limit=50, offset=offset)
+        results = await asyncio.to_thread(sp.current_user_saved_tracks, limit=50, offset=offset)
         items = results.get("items", [])
         if not items:
             break

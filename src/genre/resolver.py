@@ -43,12 +43,14 @@ async def resolve_genre(
 ) -> GenreResult:
     """Run the genre resolution waterfall for a track."""
 
+    # Fetch label once (not per waterfall level)
+    label = await discogs_lookup.get_label(discogs, artist_name, track_name)
+
     # Level 1: Spotify artist genres
     raw_genres = await spotify_genres.get_artist_genres(sp, track_id)
     if raw_genres:
         genre_key = await map_to_genre_key(session_factory, raw_genres)
         if genre_key:
-            label = discogs_lookup.get_label(discogs, artist_name, track_name)
             return GenreResult(
                 genre_key=genre_key,
                 raw_genre=raw_genres[0],
@@ -61,7 +63,6 @@ async def resolve_genre(
     if raw_genres:
         genre_key = await map_to_genre_key(session_factory, raw_genres)
         if genre_key:
-            label = discogs_lookup.get_label(discogs, artist_name, track_name)
             return GenreResult(
                 genre_key=genre_key,
                 raw_genre=raw_genres[0],
@@ -74,7 +75,6 @@ async def resolve_genre(
     if raw_genres:
         genre_key = await map_to_genre_key(session_factory, raw_genres)
         if genre_key:
-            label = discogs_lookup.get_label(discogs, artist_name, track_name)
             return GenreResult(
                 genre_key=genre_key,
                 raw_genre=raw_genres[0],
@@ -83,8 +83,5 @@ async def resolve_genre(
             )
 
     # Level 4: manual — no genre found
-    label = discogs_lookup.get_label(discogs, artist_name, track_name)
-    logger.info(
-        "genre.manual_needed", artist=artist_name, track=track_name
-    )
+    logger.info("genre.manual_needed", artist=artist_name, track=track_name)
     return GenreResult(genre_key=None, raw_genre=None, source="manual", label=label)

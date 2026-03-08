@@ -1,5 +1,7 @@
 """Search Discogs for genre and style information."""
 
+import asyncio
+
 import discogs_client
 import structlog
 
@@ -12,7 +14,7 @@ async def search_genre(
     """Search Discogs for a release and return genre + style tags."""
     try:
         query = f"{artist_name} {track_name}"
-        results = discogs.search(query, type="release")
+        results = await asyncio.to_thread(discogs.search, query, type="release")
 
         if not results or results.count == 0:
             return []
@@ -31,11 +33,13 @@ async def search_genre(
         return []
 
 
-def get_label(discogs: discogs_client.Client, artist_name: str, track_name: str) -> str | None:
+async def get_label(
+    discogs: discogs_client.Client, artist_name: str, track_name: str
+) -> str | None:
     """Try to find the record label from Discogs."""
     try:
         query = f"{artist_name} {track_name}"
-        results = discogs.search(query, type="release")
+        results = await asyncio.to_thread(discogs.search, query, type="release")
         if results and results.count > 0:
             release = results[0]
             labels = release.labels
