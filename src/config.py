@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     lastfm_api_key: str
     lastfm_api_secret: str
 
-    # Database
-    database_url: str = "postgresql+asyncpg://user:pass@localhost:5432/aux_dj_bot"
+    # Database (no default — must be set explicitly)
+    database_url: str
 
     # App
     poll_schedule: str = Field(default="08:00,20:00", description="Comma-separated HH:MM times (UTC)")

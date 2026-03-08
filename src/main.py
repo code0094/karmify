@@ -11,6 +11,7 @@ import pylast
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import update
 
 from src.bot.app import create_bot, create_dispatcher
 from src.bot.notifications import send_new_like_notification
@@ -32,7 +33,7 @@ async def main() -> None:
     setup_logging(settings.log_level)
 
     # Database
-    session_factory = build_engine(settings)
+    engine, session_factory = build_engine(settings)
 
     # Spotify clients
     karma_client = SpotifyClient("karma", settings, session_factory)
@@ -66,13 +67,9 @@ async def main() -> None:
 
         # Update track in DB with genre info
         async with session_factory() as session:
-            from sqlalchemy import update
-
-            from src.db.models import LikedTrack as LT
-
             await session.execute(
-                update(LT)
-                .where(LT.id == track.id)
+                update(LikedTrack)
+                .where(LikedTrack.id == track.id)
                 .values(detected_genre=genre_result.genre_key, genre_source=genre_result.source)
             )
             await session.commit()
@@ -124,10 +121,12 @@ async def main() -> None:
     # Wait for shutdown signal
     await shutdown_event.wait()
 
+    # Cleanup
     logger.info("shutdown.stopping")
     scheduler.shutdown(wait=False)
-    await bot.session.close()
     polling_task.cancel()
+    await bot.session.close()
+    await engine.dispose()
     logger.info("shutdown.done")
 
 

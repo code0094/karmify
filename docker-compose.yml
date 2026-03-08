@@ -10,15 +10,14 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: pass
-      POSTGRES_DB: aux_dj_bot
+      POSTGRES_USER: ${POSTGRES_USER:-auxbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-aux_dj_bot}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # No ports exposed — only accessible from bot service via Docker network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d aux_dj_bot"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-auxbot} -d ${POSTGRES_DB:-aux_dj_bot}"]
       interval: 5s
       timeout: 5s
       retries: 5
