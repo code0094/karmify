@@ -72,8 +72,8 @@ async def insert_liked_track(session: AsyncSession, track: LikedTrack) -> LikedT
 async def assign_track_to_playlist(
     session: AsyncSession,
     track_id: int,
-    playlist_id: str,
-    assigned_by: str,
+    playlist_id: str | None,
+    assigned_by: str | None,
     telegram_message_id: int | None = None,
 ) -> None:
     """Assign a liked track to a playlist."""
@@ -118,6 +118,17 @@ async def get_playlist_by_genre_key(
 async def get_track_by_id(session: AsyncSession, track_id: int) -> LikedTrack | None:
     """Get liked track by primary key."""
     return await session.get(LikedTrack, track_id)
+
+
+async def get_track_for_update(session: AsyncSession, track_id: int) -> LikedTrack | None:
+    """Get liked track with row-level lock (SELECT FOR UPDATE)."""
+    stmt = (
+        select(LikedTrack)
+        .where(LikedTrack.id == track_id)
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 async def get_last_liked_at(session: AsyncSession, user_label: str) -> datetime | None:
