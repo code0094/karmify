@@ -11,9 +11,9 @@ Telegram-бот для промо-команды **AUX MASTERS** для двух
 ## Architecture
 
 ```
-┌─────────────┐     polling 30s      ┌──────────────┐
-│  Spotify API │◄────────────────────│   Poller      │
-│  (2 accounts)│                     │  (asyncio)    │
+┌─────────────┐   schedule 08:00/20:00  ┌──────────────┐
+│  Spotify API │◄──────────────────────│   Poller      │
+│  (2 accounts)│                       │ (APScheduler) │
 └─────────────┘                      └──────┬───────┘
                                             │ new like detected
                                             ▼
@@ -54,7 +54,7 @@ Telegram-бот для промо-команды **AUX MASTERS** для двух
 - **python3-discogs-client** — Discogs API
 - **pylast** — Last.fm API
 - **SQLAlchemy 2.0 + asyncpg** — async PostgreSQL ORM
-- **APScheduler** или **asyncio loop** — polling scheduler
+- **APScheduler** — scheduled polling (08:00 / 20:00 daily)
 - **Pydantic v2** — settings, validation
 - **Docker + docker-compose** — deployment
 
@@ -224,7 +224,7 @@ LASTFM_API_SECRET=
 DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/aux_dj_bot
 
 # App
-POLL_INTERVAL_SECONDS=30
+POLL_SCHEDULE=08:00,20:00       # cron-style, UTC
 LOG_LEVEL=INFO
 ```
 
@@ -259,7 +259,7 @@ LOG_LEVEL=INFO
 - Endpoint `/health` (aiohttp) для мониторинга:
   - DB connection alive
   - Spotify tokens valid (не expired)
-  - Last poll timestamp < 2 × POLL_INTERVAL
+  - Last poll timestamp < 24h ago
 - Docker HEALTHCHECK в Dockerfile
 
 ### Graceful Shutdown
@@ -323,7 +323,8 @@ Before adding to playlist, check `liked_tracks` table AND call
 Spotify's playlist tracks endpoint to verify track isn't already there.
 
 ### Polling Strategy
-- Poll `GET /me/tracks?limit=5` every 30 seconds per account
+- Schedule: **08:00** и **20:00** UTC ежедневно (APScheduler CronTrigger)
+- На каждый запуск: `GET /me/tracks?limit=50` per account (забираем все новые за 12ч)
 - Compare with last known `liked_at` timestamp from DB
 - Process only genuinely new tracks
 - Handle rate limits with exponential backoff
