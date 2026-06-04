@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aux-dj-bot"
+name = "karmify"
 version = "0.1.0"
-description = "Telegram bot for AUX MASTERS — Spotify liked tracks genre sorter"
+description = "Multi-source music acquisition and library tool for DJs"
 requires-python = ">=3.11"
 dependencies = [
     "aiogram>=3.4,<4",

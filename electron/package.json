@@ -1,7 +1,7 @@
 {
-  "name": "aux-dj-desktop",
+  "name": "karmify-desktop",
   "version": "0.1.0",
-  "description": "AUX MASTERS desktop app — multi-source DJ library tool",
+  "description": "Karmify desktop app — multi-source DJ library tool",
   "main": "main.js",
   "type": "module",
   "scripts": {
