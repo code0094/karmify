@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 import spotipy
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from spotipy.oauth2 import SpotifyOAuth
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.config import Settings
 from src.db import repos

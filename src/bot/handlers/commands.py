@@ -5,21 +5,35 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+import structlog
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 
 from src.db.models import LikedTrack
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+logger = structlog.get_logger()
 router = Router()
 
 
-def setup_command_router(session_factory: async_sessionmaker[AsyncSession]) -> Router:
-    """Create and return a router with command handlers."""
+def setup_command_router(
+    session_factory: async_sessionmaker[AsyncSession],
+    fetch_likes: Callable[[], Awaitable[int]],
+) -> Router:
+    """Create and return a router with command handlers.
+
+    Args:
+        session_factory: Async DB session factory.
+        fetch_likes: Coroutine that polls Spotify for new likes once and returns
+            the number of new tracks processed (manual replacement for the
+            scheduled poller).
+    """
 
     @router.message(Command("start"))
     async def handle_start(message: Message) -> None:
@@ -27,10 +41,27 @@ def setup_command_router(session_factory: async_sessionmaker[AsyncSession]) -> R
             "🎵 AUX DJ Bot\n"
             "Мониторю лайки в Spotify и помогаю сортировать по жанровым плейлистам.\n\n"
             "Команды:\n"
+            "/fetch — проверить новые лайки сейчас\n"
             "/playlists — список плейлистов\n"
             "/stats — статистика за неделю\n"
             "/stats 30 — статистика за 30 дней"
         )
+
+    @router.message(Command("fetch"))
+    async def handle_fetch(message: Message) -> None:
+        """Manually poll Spotify for new likes (replaces the scheduled watchdog)."""
+        await message.answer("🔄 Проверяю новые лайки…")
+        try:
+            new_count = await fetch_likes()
+        except Exception:
+            logger.exception("fetch.error")
+            await message.answer("❌ Ошибка при проверке лайков")
+            return
+
+        if new_count == 0:
+            await message.answer("Новых лайков нет.")
+        else:
+            await message.answer(f"✅ Найдено новых треков: {new_count}")
 
     @router.message(Command("playlists"))
     async def handle_playlists(message: Message) -> None:
@@ -87,13 +118,15 @@ def setup_command_router(session_factory: async_sessionmaker[AsyncSession]) -> R
             # Auto vs manual count
             auto_q = (
                 select(
-                    func.count().filter(
-                        LikedTrack.genre_source.notin_(["manual", None])
-                    ).label("auto"),
-                    func.count().filter(
+                    func.count()
+                    .filter(LikedTrack.genre_source.notin_(["manual", None]))
+                    .label("auto"),
+                    func.count()
+                    .filter(
                         LikedTrack.genre_source.in_(["manual", None])
                         | LikedTrack.genre_source.is_(None)
-                    ).label("manual"),
+                    )
+                    .label("manual"),
                 )
                 .select_from(LikedTrack)
                 .where(base_filter)
@@ -114,9 +147,7 @@ def setup_command_router(session_factory: async_sessionmaker[AsyncSession]) -> R
         user_parts = " | ".join(f"{u}: {c}" for u, c in sorted(user_rows))
         auto_pct = round(auto_count / total * 100) if total > 0 else 0
 
-        genre_lines = "\n".join(
-            f"  {i + 1}. {g} — {c}" for i, (g, c) in enumerate(genre_rows)
-        )
+        genre_lines = "\n".join(f"  {i + 1}. {g} — {c}" for i, (g, c) in enumerate(genre_rows))
 
         text = (
             f"📊 Статистика AUX MASTERS ({period_label}):\n"

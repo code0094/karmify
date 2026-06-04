@@ -77,6 +77,27 @@ async def assign_track_to_playlist(
     await session.commit()
 
 
+async def list_tracks(
+    session: AsyncSession,
+    *,
+    genre: str | None = None,
+    liked_by: str | None = None,
+    only_undownloaded: bool = False,
+    limit: int = 200,
+) -> list[LikedTrack]:
+    """List liked tracks with optional filters, newest first."""
+    stmt = select(LikedTrack).order_by(LikedTrack.created_at.desc())
+    if genre:
+        stmt = stmt.where(LikedTrack.detected_genre == genre)
+    if liked_by:
+        stmt = stmt.where(LikedTrack.liked_by == liked_by)
+    if only_undownloaded:
+        stmt = stmt.where(LikedTrack.downloaded_at.is_(None))
+    stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def get_all_playlists(session: AsyncSession) -> list[GenrePlaylist]:
     """Get all genre playlists."""
     stmt = select(GenrePlaylist).order_by(GenrePlaylist.display_name)
@@ -92,9 +113,7 @@ async def find_genre_key(session: AsyncSession, genre_string: str) -> str | None
     return result.scalar_one_or_none()
 
 
-async def get_playlist_by_genre_key(
-    session: AsyncSession, genre_key: str
-) -> GenrePlaylist | None:
+async def get_playlist_by_genre_key(session: AsyncSession, genre_key: str) -> GenrePlaylist | None:
     """Get playlist for a genre key."""
     stmt = select(GenrePlaylist).where(GenrePlaylist.genre_key == genre_key)
     result = await session.execute(stmt)
@@ -113,13 +132,20 @@ async def get_track_by_id(session: AsyncSession, track_id: int) -> LikedTrack | 
 
 async def get_track_for_update(session: AsyncSession, track_id: int) -> LikedTrack | None:
     """Get liked track with row-level lock (SELECT FOR UPDATE)."""
-    stmt = (
-        select(LikedTrack)
-        .where(LikedTrack.id == track_id)
-        .with_for_update()
-    )
+    stmt = select(LikedTrack).where(LikedTrack.id == track_id).with_for_update()
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def mark_track_downloaded(session: AsyncSession, track_id: int, download_path: str) -> None:
+    """Record that a track's audio has been downloaded to a local path."""
+    stmt = (
+        update(LikedTrack)
+        .where(LikedTrack.id == track_id)
+        .values(downloaded_at=datetime.now().astimezone(), download_path=download_path)
+    )
+    await session.execute(stmt)
+    await session.commit()
 
 
 async def get_last_liked_at(session: AsyncSession, user_label: str) -> datetime | None:

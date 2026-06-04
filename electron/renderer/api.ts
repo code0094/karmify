@@ -1,0 +1,51 @@
+import type { Playlist, SearchResult, Track, TrackFilters } from "./types";
+
+declare global {
+  interface Window {
+    aux?: { sidecarUrl: string };
+  }
+}
+
+const BASE = window.aux?.sidecarUrl ?? "http://127.0.0.1:8765";
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return (await res.json()) as T;
+}
+
+export const api = {
+  listTracks(filters: TrackFilters = {}): Promise<Track[]> {
+    const params = new URLSearchParams();
+    if (filters.genre) params.set("genre", filters.genre);
+    if (filters.liked_by) params.set("liked_by", filters.liked_by);
+    if (filters.only_undownloaded) params.set("only_undownloaded", "true");
+    const qs = params.toString();
+    return request<Track[]>("GET", `/tracks${qs ? `?${qs}` : ""}`);
+  },
+  listPlaylists(): Promise<Playlist[]> {
+    return request<Playlist[]>("GET", "/playlists");
+  },
+  fetchLikes(): Promise<{ new: number }> {
+    return request<{ new: number }>("POST", "/likes/fetch");
+  },
+  assign(trackId: number, playlistDbId: number): Promise<{ added: boolean }> {
+    return request("POST", `/tracks/${trackId}/assign`, { playlist_db_id: playlistDbId });
+  },
+  download(trackId: number, source = "spotify"): Promise<{ path: string }> {
+    return request("POST", `/tracks/${trackId}/download`, { source });
+  },
+  search(query: string, source = "spotify", limit = 20): Promise<SearchResult[]> {
+    return request("POST", "/sources/search", { query, source, limit });
+  },
+  downloadResult(result: SearchResult): Promise<{ path: string }> {
+    return request("POST", "/sources/download", { result });
+  },
+};

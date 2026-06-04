@@ -11,3 +11,11 @@ build/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Electron / renderer
+electron/node_modules/
+electron/dist/
+
+# Downloaded audio + local DJ library (root-level only — not src/library/ code)
+/downloads/
+/library/

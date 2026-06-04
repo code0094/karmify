@@ -25,9 +25,7 @@ async def track_in_playlist(sp: spotipy.Spotify, playlist_id: str, track_id: str
     return False
 
 
-async def add_track_to_playlist(
-    sp: spotipy.Spotify, playlist_id: str, track_id: str
-) -> bool:
+async def add_track_to_playlist(sp: spotipy.Spotify, playlist_id: str, track_id: str) -> bool:
     """Add a track to a playlist if not already present. Returns True if added."""
     if await track_in_playlist(sp, playlist_id, track_id):
         logger.info("playlist.track_already_exists", playlist=playlist_id, track=track_id)
@@ -38,9 +36,7 @@ async def add_track_to_playlist(
     return True
 
 
-async def remove_track_from_playlist(
-    sp: spotipy.Spotify, playlist_id: str, track_id: str
-) -> None:
+async def remove_track_from_playlist(sp: spotipy.Spotify, playlist_id: str, track_id: str) -> None:
     """Remove a track from a playlist."""
     await asyncio.to_thread(sp.playlist_remove_all_occurrences_of_items, playlist_id, [track_id])
     logger.info("playlist.track_removed", playlist=playlist_id, track=track_id)

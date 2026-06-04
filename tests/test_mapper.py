@@ -1,6 +1,6 @@
 """Tests for genre mapper."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -16,7 +16,7 @@ async def test_map_finds_matching_genre() -> None:
     mock_result.scalar_one_or_none.return_value = "hardgroove"
     session.execute.return_value = mock_result
 
-    factory = AsyncMock()
+    factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -32,7 +32,7 @@ async def test_map_returns_none_when_no_match() -> None:
     mock_result.scalar_one_or_none.return_value = None
     session.execute.return_value = mock_result
 
-    factory = AsyncMock()
+    factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
 

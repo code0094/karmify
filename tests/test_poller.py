@@ -1,6 +1,5 @@
 """Tests for Spotify poller."""
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,7 +32,7 @@ async def test_poller_detects_new_tracks() -> None:
     # Mock session factory + repos
     session = AsyncMock()
 
-    factory = AsyncMock()
+    factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -71,7 +70,7 @@ async def test_poller_skips_existing_tracks() -> None:
     client.get_client = AsyncMock(return_value=sp)
 
     session = AsyncMock()
-    factory = AsyncMock()
+    factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
 

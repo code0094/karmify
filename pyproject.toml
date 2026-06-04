@@ -20,6 +20,15 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "aiohttp>=3.9,<4",
     "structlog>=24.1,<25",
+    # Direct-from-Spotify audio downloader (active fork). Needs system ffmpeg.
+    "zotify @ git+https://github.com/Googolplexed0/zotify@v0.17.0",
+    # Sidecar HTTP API consumed by the Electron desktop app
+    "fastapi>=0.110,<1",
+    "uvicorn>=0.29,<1",
+    # Soulseek (FLAC) via slskd daemon
+    "slskd-api>=0.2,<1",
+    # Bandcamp scraper: antidetect headless browser (best vs Cloudflare per May 2026 bench)
+    "nodriver>=0.40,<1",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +62,10 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends() in argument defaults is the framework's intended idiom.
+extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

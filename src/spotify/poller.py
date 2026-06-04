@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import structlog
@@ -24,8 +24,12 @@ async def poll_user_likes(
     spotify_client: SpotifyClient,
     session_factory: async_sessionmaker[AsyncSession],
     on_new_track: Callable[[LikedTrack], Coroutine[Any, Any, None]],
-) -> None:
-    """Fetch recent likes for one user, insert new ones, and call on_new_track callback."""
+) -> int:
+    """Fetch recent likes for one user, insert new ones, call on_new_track.
+
+    Returns:
+        The number of genuinely new tracks processed.
+    """
     sp = await spotify_client.get_client()
     user_label = spotify_client.user_label
 
@@ -75,16 +79,19 @@ async def poll_user_likes(
         offset += 50
 
     logger.info("poller.done", user=user_label, new_tracks=new_count)
+    return new_count
 
 
 async def poll_all_users(
     clients: list[SpotifyClient],
     session_factory: async_sessionmaker[AsyncSession],
     on_new_track: Callable[[LikedTrack], Coroutine[Any, Any, None]],
-) -> None:
-    """Poll likes for all configured users."""
+) -> int:
+    """Poll likes for all configured users. Returns total new tracks processed."""
+    total = 0
     for client in clients:
         try:
-            await poll_user_likes(client, session_factory, on_new_track)
+            total += await poll_user_likes(client, session_factory, on_new_track)
         except Exception:
             logger.exception("poller.error", user=client.user_label)
+    return total

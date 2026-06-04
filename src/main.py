@@ -1,16 +1,19 @@
-"""Entrypoint: start Telegram bot + scheduled Spotify poller."""
+"""Entrypoint: start the Telegram bot.
+
+Likes are fetched on demand via the /fetch command (manual "thick client" mode) —
+there is no scheduled poller. Track audio is downloaded on demand via the ⬇️ button.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
 from functools import partial
 
 import discogs_client
 import pylast
 import structlog
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import update
 
 from src.bot.app import create_bot, create_dispatcher
@@ -21,6 +24,7 @@ from src.db.engine import build_engine
 from src.db.models import LikedTrack
 from src.genre.resolver import GenreResult, resolve_genre
 from src.spotify.client import SpotifyClient
+from src.spotify.downloader import TrackDownloader
 from src.spotify.poller import poll_all_users
 from src.utils.logging import setup_logging
 
@@ -47,9 +51,11 @@ async def main() -> None:
         api_key=settings.lastfm_api_key, api_secret=settings.lastfm_api_secret
     )
 
+    # On-demand track audio downloader (zotify)
+    downloader = TrackDownloader(settings)
+
     # Telegram bot
     bot = create_bot(settings.telegram_bot_token)
-    dp = create_dispatcher(session_factory, spotify_clients)
 
     async def on_new_track(track: LikedTrack) -> None:
         """Process a newly detected liked track: resolve genre and notify."""
@@ -89,20 +95,10 @@ async def main() -> None:
             message_id=msg_id,
         )
 
-    # Scheduler for polling
-    scheduler = AsyncIOScheduler()
-    poll_job = partial(poll_all_users, all_clients, session_factory, on_new_track)
+    # Manual fetch (replaces the scheduled watchdog): one poll pass over all users.
+    fetch_likes = partial(poll_all_users, all_clients, session_factory, on_new_track)
 
-    for hour, minute in settings.poll_times():
-        scheduler.add_job(
-            poll_job,
-            CronTrigger(hour=hour, minute=minute),
-            id=f"poll_{hour:02d}_{minute:02d}",
-            replace_existing=True,
-        )
-        logger.info("scheduler.job_added", time=f"{hour:02d}:{minute:02d}")
-
-    scheduler.start()
+    dp = create_dispatcher(session_factory, spotify_clients, downloader, settings, fetch_likes)
 
     # Graceful shutdown
     shutdown_event = asyncio.Event()
@@ -113,21 +109,25 @@ async def main() -> None:
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, _signal_handler)
+        # Windows ProactorEventLoop has no add_signal_handler; we rely on the
+        # KeyboardInterrupt fallback below instead.
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, _signal_handler)
 
     # Start polling for Telegram updates
     polling_task = asyncio.create_task(dp.start_polling(bot))
 
-    # Wait for shutdown signal
-    await shutdown_event.wait()
-
-    # Cleanup
-    logger.info("shutdown.stopping")
-    scheduler.shutdown(wait=False)
-    polling_task.cancel()
-    await bot.session.close()
-    await engine.dispose()
-    logger.info("shutdown.done")
+    # Wait for shutdown signal (or Ctrl+C on platforms without signal handlers)
+    try:
+        await shutdown_event.wait()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        logger.info("shutdown.interrupted")
+    finally:
+        logger.info("shutdown.stopping")
+        polling_task.cancel()
+        await bot.session.close()
+        await engine.dispose()
+        logger.info("shutdown.done")
 
 
 if __name__ == "__main__":

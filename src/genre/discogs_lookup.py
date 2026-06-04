@@ -24,9 +24,7 @@ async def search_genre(
         styles: list[str] = list(release.styles or [])
 
         all_tags = genres + styles
-        logger.debug(
-            "discogs.result", artist=artist_name, track=track_name, tags=all_tags
-        )
+        logger.debug("discogs.result", artist=artist_name, track=track_name, tags=all_tags)
         return all_tags
     except Exception:
         logger.exception("discogs.error", artist=artist_name, track=track_name)

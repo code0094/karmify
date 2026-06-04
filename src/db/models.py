@@ -55,6 +55,8 @@ class LikedTrack(Base):
     assigned_by: Mapped[str | None] = mapped_column(String(50))
     assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    download_path: Mapped[str | None] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
