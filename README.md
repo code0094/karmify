@@ -2,7 +2,7 @@
 
 **A multi-source music acquisition and library tool for DJs.**
 
-Karmify watches the Spotify "Liked Songs" of a DJ crew, figures out each track's
+Karmify watches your Spotify "Liked Songs", figures out each track's
 genre through a cascade of music APIs, and lets you pull the actual audio — in
 lossless where possible — from **Spotify, Soulseek, or Bandcamp**, dropping
 finished, tagged files straight into a folder your Rekordbox/Serato library
