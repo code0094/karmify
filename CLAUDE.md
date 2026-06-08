@@ -361,3 +361,23 @@ docker-compose up -d --build
 - Do NOT commit `.env` files
 - Do NOT call real external APIs in tests
 - Do NOT ignore rate limits from Spotify (429) or Discogs (60/min)
+
+## Deployment TODO (VPS 31.76.24.63 — Karmify backend)
+
+Backend ядро развёрнуто (Postgres + venv + sidecar systemd `karmify-sidecar`
+на 127.0.0.1:8765, `/health` → ok). Осталось собрать креды и вписать их в
+`/opt/aux-dj-bot/.env` (заменить значения `CHANGEME`), затем
+`systemctl restart karmify-sidecar`.
+
+Собрать и вписать:
+- [ ] `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` (Spotify Developer app)
+- [ ] `KARMA_SPOTIFY_REFRESH_TOKEN` / `STRESS303_SPOTIFY_REFRESH_TOKEN` (OAuth per account)
+- [ ] `DISCOGS_USER_TOKEN`
+- [ ] `LASTFM_API_KEY` / `LASTFM_API_SECRET`
+- [ ] `ZOTIFY_CREDENTIALS_PATH` — credentials.json от BURNER Spotify-аккаунта (для скачивания)
+- [ ] Soulseek: поднять slskd в Docker, прописать `SLSKD_URL` / `SLSKD_API_KEY` / `SLSKD_DOWNLOADS_DIR` + Soulseek-аккаунт
+- [ ] Bandcamp: `BANDCAMP_MAIL_ADDRESS` / `BANDCAMP_MAIL_PASSWORD` (Gmail + app password)
+
+После вписывания проверить: `/likes/fetch` тянет лайки и резолвит жанр;
+`/sources/search` ищет по источникам. Доступ к sidecar — SSH-туннель
+`ssh -L 8765:127.0.0.1:8765 root@31.76.24.63`.
