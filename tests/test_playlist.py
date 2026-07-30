@@ -12,6 +12,7 @@ import pytest
 
 from src.spotify.playlist import (
     add_track_to_playlist,
+    move_track,
     remove_track_from_playlist,
     track_in_playlist,
 )
@@ -102,3 +103,40 @@ async def test_remove_track() -> None:
     await remove_track_from_playlist(sp, "pl", "t1")
 
     sp.playlist_remove_all_occurrences_of_items.assert_called_once_with("pl", ["t1"])
+
+
+@pytest.mark.asyncio
+async def test_move_removes_before_adding() -> None:
+    """Removal first: a failed remove must not leave the track in both lists."""
+    sp = MagicMock()
+    sp.playlist_tracks.return_value = {"items": []}
+    calls: list[str] = []
+    sp.playlist_remove_all_occurrences_of_items.side_effect = lambda *a: calls.append("remove")
+    sp.playlist_add_items.side_effect = lambda *a: calls.append("add")
+
+    added = await move_track(sp, "t1", from_playlist="pl_old", to_playlist="pl_new")
+
+    assert added is True
+    assert calls == ["remove", "add"]
+
+
+@pytest.mark.asyncio
+async def test_move_without_previous_playlist_only_adds() -> None:
+    sp = MagicMock()
+    sp.playlist_tracks.return_value = {"items": []}
+
+    await move_track(sp, "t1", from_playlist=None, to_playlist="pl_new")
+
+    sp.playlist_remove_all_occurrences_of_items.assert_not_called()
+    sp.playlist_add_items.assert_called_once_with("pl_new", ["t1"])
+
+
+@pytest.mark.asyncio
+async def test_move_to_same_playlist_does_not_remove() -> None:
+    sp = MagicMock()
+    sp.playlist_tracks.return_value = {"items": [{"track": {"id": "t1"}}]}
+
+    added = await move_track(sp, "t1", from_playlist="pl", to_playlist="pl")
+
+    assert added is False  # dedup reports it as already there
+    sp.playlist_remove_all_occurrences_of_items.assert_not_called()

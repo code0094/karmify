@@ -123,9 +123,15 @@ class SoulseekSource(MusicSource):
     def _download_blocking(self, result: SearchResult, dest_dir: Path) -> Path:
         import time
 
-        client = self._client()
         username = result.extra.get("username", "")
         filename = result.extra.get("filename", "")
+        if not username or not filename:
+            raise SourceError(
+                "Soulseek downloads need a search result (username + filename in extra); "
+                f"got download_ref={result.download_ref!r}"
+            )
+
+        client = self._client()
         size = result.size_bytes or 0
 
         client.transfers.enqueue(username=username, files=[{"filename": filename, "size": size}])

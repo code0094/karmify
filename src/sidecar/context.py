@@ -54,6 +54,9 @@ class AppContext:
         self.downloader = TrackDownloader(settings)
         self.library = LibraryManager(settings.library_dir)
         self.sources = self._build_sources()
+        # Track ids with a download in flight — a second click must not start
+        # a parallel fetch of the same track.
+        self._downloading: set[int] = set()
 
     def _build_sources(self) -> dict[str, MusicSource]:
         """Construct the available music sources based on configuration."""
@@ -107,24 +110,55 @@ class AppContext:
 
     async def download_liked_track(self, track_id: int, *, source: str = "spotify") -> Path:
         """Download a liked track's audio, copy to library, mark it downloaded."""
+        if track_id in self._downloading:
+            raise SourceError(f"Track {track_id} is already being downloaded")
+
         async with self.session_factory() as session:
             track = await repos.get_track_by_id(session, track_id)
         if track is None:
             raise SourceError(f"Track {track_id} not found")
 
         src = self._require_source(source)
-        result = SearchResult(
-            source=source,
-            title=track.track_name or "",
-            artist=track.artist_name or "",
-            download_ref=track.spotify_track_id,
-        )
-        path = await src.download(result, Path(self.settings.download_dir))
+        self._downloading.add(track_id)
+        try:
+            result = await self._resolve_candidate(src, source, track)
+            path = await src.download(result, Path(self.settings.download_dir))
+        finally:
+            self._downloading.discard(track_id)
+
         self.library.add(path, subdir=track.detected_genre)
 
         async with self.session_factory() as session:
             await repos.mark_track_downloaded(session, track_id, str(path))
         return path
+
+    async def _resolve_candidate(
+        self, src: MusicSource, source: str, track: LikedTrack
+    ) -> SearchResult:
+        """Find what to hand the source's download() for a liked track.
+
+        Only Spotify can fetch by track id. Every other source needs a real
+        search hit — its download() reads source-specific fields (a Soulseek
+        username and file path, a Bandcamp URL) that a hand-built result from
+        a Spotify id simply does not carry.
+        """
+        if source == "spotify":
+            return SearchResult(
+                source=source,
+                title=track.track_name or "",
+                artist=track.artist_name or "",
+                download_ref=track.spotify_track_id,
+            )
+
+        query = f"{track.artist_name or ''} {track.track_name or ''}".strip()
+        if not query:
+            raise SourceError(f"Track {track.id} has no artist/title to search {source} with")
+
+        candidates = await src.search(query, limit=10)
+        if not candidates:
+            raise SourceError(f"No {source} match for {query!r}")
+        # Sources rank their own results (Soulseek puts lossless first).
+        return candidates[0]
 
     async def search_sources(
         self, query: str, *, source: str, limit: int = 20

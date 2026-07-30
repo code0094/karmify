@@ -27,9 +27,14 @@ class FakeSource(MusicSource):
 
     def __init__(self) -> None:
         self.downloads: list[SearchResult] = []
+        self.searched: list[str] = []
+        self.results = [
+            SearchResult(source="spotify", title="Akephale", artist="ROD", download_ref="t1")
+        ]
 
     async def search(self, query: str, *, limit: int = 20) -> list[SearchResult]:
-        return [SearchResult(source="spotify", title="Akephale", artist="ROD", download_ref="t1")]
+        self.searched.append(query)
+        return self.results
 
     async def download(self, result: SearchResult, dest_dir: Path) -> Path:
         self.downloads.append(result)
@@ -132,3 +137,47 @@ async def test_download_result_no_subdir(
     path = await ctx.download_result(result)
 
     ctx.library.add.assert_called_once_with(path)
+
+
+@pytest.mark.asyncio
+async def test_download_liked_track_searches_non_spotify_sources(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Soulseek/Bandcamp downloads need a real search hit: their download()
+    reads source-specific fields a Spotify id cannot provide."""
+    ctx = AppContext(make_settings(download_dir=str(tmp_path)))
+    fake = FakeSource()
+    ctx.sources["soulseek"] = fake
+    ctx.library = MagicMock()
+
+    track = LikedTrack(
+        id=7, spotify_track_id="t1", track_name="Akephale", artist_name="ROD", liked_by="karma"
+    )
+    monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=track))
+    monkeypatch.setattr(ctxmod.repos, "mark_track_downloaded", AsyncMock())
+
+    await ctx.download_liked_track(7, source="soulseek")
+
+    # The search hit was downloaded, not a hand-built result from the track id.
+    assert fake.downloads[0].download_ref == "t1"
+    assert fake.searched == ["ROD Akephale"]
+
+
+@pytest.mark.asyncio
+async def test_download_liked_track_no_match(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = AppContext(make_settings())
+    empty = FakeSource()
+    empty.results = []
+    ctx.sources["soulseek"] = empty
+    monkeypatch.setattr(
+        ctxmod.repos,
+        "get_track_by_id",
+        AsyncMock(return_value=LikedTrack(id=7, spotify_track_id="t1", artist_name="ROD")),
+    )
+
+    with pytest.raises(SourceError, match="No soulseek match"):
+        await ctx.download_liked_track(7, source="soulseek")

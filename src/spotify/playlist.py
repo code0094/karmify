@@ -42,3 +42,17 @@ async def remove_track_from_playlist(sp: spotipy.Spotify, playlist_id: str, trac
     """Remove a track from a playlist."""
     await asyncio.to_thread(sp.playlist_remove_all_occurrences_of_items, playlist_id, [track_id])
     logger.info("playlist.track_removed", playlist=playlist_id, track=track_id)
+
+
+async def move_track(
+    sp: spotipy.Spotify, track_id: str, *, from_playlist: str | None, to_playlist: str
+) -> bool:
+    """Move a track between playlists; returns True if it was added.
+
+    Removal comes first so a failure cannot leave the track in both playlists.
+    Passing the same playlist twice is a no-op removal (the dedup check in
+    :func:`add_track_to_playlist` then reports it as already present).
+    """
+    if from_playlist and from_playlist != to_playlist:
+        await remove_track_from_playlist(sp, from_playlist, track_id)
+    return await add_track_to_playlist(sp, to_playlist, track_id)

@@ -165,18 +165,11 @@ def create_app(context: AppContext) -> FastAPI:
             if client is None:
                 raise HTTPException(status_code=400, detail="No Spotify client for user")
             sp = await client.get_client()
-
-            # Re-assigning must move the track, not copy it: without this the
-            # track would sit in both the old and the new Spotify playlist
-            # while the DB records only the new one.
-            previous = track.assigned_playlist_id
-            if previous and previous != playlist.playlist_id:
-                await spotify_playlist.remove_track_from_playlist(
-                    sp, previous, track.spotify_track_id
-                )
-
-            added = await spotify_playlist.add_track_to_playlist(
-                sp, playlist.playlist_id, track.spotify_track_id
+            added = await spotify_playlist.move_track(
+                sp,
+                track.spotify_track_id,
+                from_playlist=track.assigned_playlist_id,
+                to_playlist=playlist.playlist_id,
             )
             await repos.assign_track_to_playlist(
                 session, track_id, playlist.playlist_id, track.liked_by

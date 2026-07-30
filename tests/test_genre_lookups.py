@@ -163,3 +163,12 @@ async def test_search_release_returns_tags_and_label_in_one_query() -> None:
     assert tags == ["Electronic", "Hardgroove"]
     assert found_label == "Planet Rhythm"
     client.search.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_spotify_generic_exception_is_swallowed() -> None:
+    """Network errors are not SpotifyException — they must not kill the cascade."""
+    sp = MagicMock()
+    sp.track.side_effect = RuntimeError("connection reset")
+
+    assert await get_artist_genres(sp, "t1") == []

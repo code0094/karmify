@@ -115,6 +115,17 @@ _PLAYLIST = GenrePlaylist(
 )
 
 
+def _real_move(add_mock: AsyncMock):
+    """move_track with its real remove-then-add logic over the patched pieces."""
+
+    async def _move(sp, track_id, *, from_playlist, to_playlist):
+        if from_playlist and from_playlist != to_playlist:
+            await appmod.spotify_playlist.remove_track_from_playlist(sp, from_playlist, track_id)
+        return await add_mock(sp, to_playlist, track_id)
+
+    return _move
+
+
 def _assign_ctx(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, AsyncMock, AsyncMock, object]:
     """Context wired for the assign happy path; returns (ctx, add_mock, assign_mock, sp)."""
     ctx = _make_ctx()
@@ -127,6 +138,7 @@ def _assign_ctx(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, AsyncMock, 
     monkeypatch.setattr(appmod.repos, "get_playlist_by_id", AsyncMock(return_value=_PLAYLIST))
     add_mock = AsyncMock(return_value=True)
     monkeypatch.setattr(appmod.spotify_playlist, "add_track_to_playlist", add_mock)
+    monkeypatch.setattr(appmod.spotify_playlist, "move_track", _real_move(add_mock))
     assign_mock = AsyncMock()
     monkeypatch.setattr(appmod.repos, "assign_track_to_playlist", assign_mock)
     return ctx, add_mock, assign_mock, sp

@@ -198,3 +198,18 @@ async def test_soulseek_download_requires_downloads_dir(
     with pytest.raises(SourceError, match="downloads_dir"):
         await src.download(_soulseek_result(), tmp_path / "out")
     client_factory.assert_not_called()  # fails before touching slskd
+
+
+@pytest.mark.asyncio
+async def test_soulseek_download_without_search_metadata_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand-built result (no extra) used to reach slskd with empty fields."""
+    src = SoulseekSource("http://x", "key", str(tmp_path))
+    client_factory = MagicMock()
+    monkeypatch.setattr(src, "_client", client_factory)
+    bare = SearchResult(source="soulseek", title="t", artist="a", download_ref="spotify_id")
+
+    with pytest.raises(SourceError, match="search result"):
+        await src.download(bare, tmp_path / "out")
+    client_factory.assert_not_called()
