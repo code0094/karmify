@@ -7,7 +7,9 @@ objects); only the DB repo calls and the sources themselves are substituted.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -181,3 +183,54 @@ async def test_download_liked_track_no_match(
 
     with pytest.raises(SourceError, match="No soulseek match"):
         await ctx.download_liked_track(7, source="soulseek")
+
+
+@pytest.mark.asyncio
+async def test_download_liked_track_rejects_already_downloaded(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = AppContext(make_settings())
+    done = LikedTrack(
+        id=7, spotify_track_id="t1", liked_by="karma", downloaded_at=datetime(2026, 7, 1)
+    )
+    monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=done))
+
+    with pytest.raises(SourceError, match="already downloaded"):
+        await ctx.download_liked_track(7)
+
+
+@pytest.mark.asyncio
+async def test_download_liked_track_is_single_flight(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The second concurrent call must be refused, and the slot must free up."""
+    ctx = AppContext(make_settings(download_dir=str(tmp_path)))
+    slow = FakeSource()
+    gate = asyncio.Event()
+
+    async def slow_download(result: SearchResult, dest_dir: Path) -> Path:
+        await gate.wait()
+        return dest_dir / "done.mp3"
+
+    slow.download = slow_download  # type: ignore[method-assign]
+    ctx.sources["spotify"] = slow
+    ctx.library = MagicMock()
+
+    track = LikedTrack(id=7, spotify_track_id="t1", track_name="A", liked_by="karma")
+    monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=track))
+    monkeypatch.setattr(ctxmod.repos, "mark_track_downloaded", AsyncMock())
+
+    first = asyncio.create_task(ctx.download_liked_track(7))
+    await asyncio.sleep(0.01)  # let it claim the slot and block on the gate
+
+    with pytest.raises(SourceError, match="already being downloaded"):
+        await ctx.download_liked_track(7)
+
+    gate.set()
+    await first
+    # Slot released: a new call gets past the guard (fails later on re-check).
+    with pytest.raises(SourceError, match="not found"):
+        monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=None))
+        await ctx.download_liked_track(7)

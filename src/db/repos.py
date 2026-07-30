@@ -49,9 +49,8 @@ async def track_exists(session: AsyncSession, spotify_track_id: str, liked_by: s
 async def insert_liked_track(session: AsyncSession, track: LikedTrack) -> LikedTrack:
     """Insert a new liked track. Returns the inserted row with a valid DB id."""
     session.add(track)
-    await session.flush()
+    await session.flush()  # assigns the id; no refresh needed (expire_on_commit=False)
     await session.commit()
-    await session.refresh(track)
     return track
 
 

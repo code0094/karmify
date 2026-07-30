@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from src.db import repos
 from src.sources.base import SearchResult, SourceError
@@ -64,11 +65,15 @@ class DownloadBody(BaseModel):
 class SearchBody(BaseModel):
     query: str
     source: str = "spotify"
-    limit: int = 20
+    limit: int = Field(default=20, ge=1, le=100)
 
 
 class DownloadResultBody(BaseModel):
     result: SearchResult
+
+
+def _is_audio_path(path: str) -> bool:
+    return path.startswith("/tracks/") and path.endswith("/audio")
 
 
 def get_context(request: Request) -> AppContext:
@@ -105,11 +110,12 @@ def create_app(context: AppContext) -> FastAPI:
             return await call_next(request)
 
         if auth_token:
-            # Query-param fallback exists for <audio src=...>, which cannot set
-            # headers. compare_digest keeps the check constant-time.
-            supplied = (
-                request.headers.get("x-aux-token") or request.query_params.get("token") or ""
-            )
+            supplied = request.headers.get("x-aux-token") or ""
+            # Query-param fallback ONLY for the audio route: <audio src=...>
+            # cannot set headers. Everywhere else the token stays out of URLs
+            # (they end up in access logs). compare_digest is constant-time.
+            if not supplied and request.method == "GET" and _is_audio_path(request.url.path):
+                supplied = request.query_params.get("token") or ""
             if not secrets.compare_digest(supplied, auth_token):
                 logger.warning("sidecar.token_rejected", path=request.url.path)
                 return JSONResponse(status_code=401, content={"detail": "Invalid token"})
@@ -137,6 +143,14 @@ def create_app(context: AppContext) -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Outermost: a DNS-rebound page (evil.com resolving to 127.0.0.1) sends
+    # same-origin requests with NO Origin header, sailing past the origin
+    # filter — but its Host header still says evil.com.
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=list({context.settings.sidecar_host, "127.0.0.1", "localhost"}),
+    )
+
     @app.get("/health")
     async def health(ctx: AppContext = Depends(get_context)) -> dict[str, object]:
         return {"status": "ok", "sources": list(ctx.sources)}
@@ -146,7 +160,7 @@ def create_app(context: AppContext) -> FastAPI:
         genre: str | None = None,
         liked_by: str | None = None,
         only_undownloaded: bool = False,
-        limit: int = 200,
+        limit: int = Query(default=200, ge=1, le=1000),
         ctx: AppContext = Depends(get_context),
     ) -> list[TrackOut]:
         async with ctx.session_factory() as session:
@@ -262,7 +276,8 @@ def run() -> None:
     setup_logging(settings.log_level)
     context = AppContext(settings)
     app = create_app(context)
-    uvicorn.run(app, host=settings.sidecar_host, port=settings.sidecar_port)
+    # access_log=False: request URLs may carry the audio token as a query param.
+    uvicorn.run(app, host=settings.sidecar_host, port=settings.sidecar_port, access_log=False)
 
 
 if __name__ == "__main__":

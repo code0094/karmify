@@ -26,13 +26,15 @@ def _make_ctx() -> MagicMock:
     ctx.fetch_likes = AsyncMock(return_value=3)
     ctx.settings.allowed_origins.return_value = ["http://localhost:5173"]
     ctx.settings.sidecar_auth_token = ""  # origin-filter mode unless a test opts in
+    ctx.settings.sidecar_host = "127.0.0.1"
     return ctx
 
 
 def _client(ctx: MagicMock):
     from fastapi.testclient import TestClient
 
-    return TestClient(create_app(ctx))
+    # base_url must be a trusted host: TrustedHostMiddleware rejects the rest.
+    return TestClient(create_app(ctx), base_url="http://127.0.0.1")
 
 
 def test_health_lists_sources() -> None:
@@ -412,11 +414,27 @@ def test_preflight_with_null_origin_without_token_mode() -> None:
     assert r.headers.get("access-control-allow-origin") == "null"
 
 
-def test_token_accepted_via_query_param() -> None:
-    """<audio src> cannot set headers — the audio route takes the token as query."""
+def test_query_token_rejected_outside_audio_route() -> None:
+    """URLs land in access logs — the query fallback is for <audio> only."""
     with _client(_token_ctx()) as c:
         r = c.post("/likes/fetch?token=s3cret")
-    assert r.status_code == 200
+    assert r.status_code == 401
+
+
+def test_query_token_accepted_on_audio_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """<audio src> cannot set headers — the audio route takes the token as query."""
+    audio = tmp_path / "a.mp3"
+    audio.write_bytes(b"x")
+    downloaded = LikedTrack(
+        id=7, spotify_track_id="t1", liked_by="karma", download_path=str(audio)
+    )
+    monkeypatch.setattr(appmod.repos, "get_track_by_id", AsyncMock(return_value=downloaded))
+
+    with _client(_token_ctx()) as c:
+        assert c.get("/tracks/7/audio?token=s3cret").status_code == 200
+        assert c.get("/tracks/7/audio").status_code == 401
 
 
 def test_track_audio_serves_downloaded_file(
@@ -444,3 +462,17 @@ def test_track_audio_404_when_not_downloaded(monkeypatch: pytest.MonkeyPatch) ->
     with _client(ctx) as c:
         r = c.get("/tracks/7/audio")
     assert r.status_code == 404
+
+
+def test_untrusted_host_rejected() -> None:
+    """DNS rebinding sends same-origin requests with no Origin — but the Host
+    header still names the attacker's domain."""
+    with _client(_make_ctx()) as c:
+        r = c.get("/health", headers={"host": "evil.example"})
+    assert r.status_code == 400
+
+
+def test_tracks_limit_bounds() -> None:
+    with _client(_make_ctx()) as c:
+        assert c.get("/tracks?limit=0").status_code == 422
+        assert c.get("/tracks?limit=100000").status_code == 422

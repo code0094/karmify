@@ -128,7 +128,16 @@ class AppContext:
 
             src = self._require_source(source)
             result = await self._resolve_candidate(src, source, track)
-            path = await src.download(result, Path(self.settings.download_dir))
+
+            # Claim the ref too: /sources/download works by ref, and without
+            # this the same file could be fetched in parallel via both routes.
+            if result.download_ref in self._downloading_refs:
+                raise SourceError(f"Already downloading {result.download_ref}")
+            self._downloading_refs.add(result.download_ref)
+            try:
+                path = await src.download(result, Path(self.settings.download_dir))
+            finally:
+                self._downloading_refs.discard(result.download_ref)
 
             # copy2 of a large FLAC would stall the event loop.
             await asyncio.to_thread(self.library.add, path, subdir=track.detected_genre)
