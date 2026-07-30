@@ -381,3 +381,13 @@ Backend ядро развёрнуто (Postgres + venv + sidecar systemd `karmif
 После вписывания проверить: `/likes/fetch` тянет лайки и резолвит жанр;
 `/sources/search` ищет по источникам. Доступ к sidecar — SSH-туннель
 `ssh -L 8765:127.0.0.1:8765 root@31.76.24.63`.
+
+<!-- karma-toolkit:start -->
+## karma-toolkit — project conventions (managed; edited by the karma-* skills)
+
+<!-- karma-tests:start -->
+Tests are catalogued in `notes/test-catalog.md`.
+- New code / bug fix → write the test first (TDD).
+- New feature or a closed milestone → cover it with the karma-tests skill.
+<!-- karma-tests:end -->
+<!-- karma-toolkit:end -->
