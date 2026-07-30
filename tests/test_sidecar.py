@@ -25,6 +25,7 @@ def _make_ctx() -> MagicMock:
 
     ctx.fetch_likes = AsyncMock(return_value=3)
     ctx.settings.allowed_origins.return_value = ["http://localhost:5173"]
+    ctx.settings.sidecar_auth_token = ""  # origin-filter mode unless a test opts in
     return ctx
 
 
@@ -296,16 +297,16 @@ def test_lifespan_closes_context() -> None:
 def test_origin_guard(origin: str, allowed: bool) -> None:
     ctx = _make_ctx()
     with _client(ctx) as c:
-        r = c.get("/health", headers={"Origin": origin})
+        r = c.post("/likes/fetch", headers={"Origin": origin})
     assert (r.status_code == 200) is allowed
     if not allowed:
         assert r.status_code == 403
 
 
 def test_no_origin_header_is_allowed() -> None:
-    """Non-browser clients (curl, the Electron main process health check)."""
+    """Non-browser clients (curl, scripts driving the API directly)."""
     with _client(_make_ctx()) as c:
-        r = c.get("/health")
+        r = c.post("/likes/fetch")
     assert r.status_code == 200
 
 
@@ -347,3 +348,38 @@ def test_assign_to_same_playlist_does_not_remove(monkeypatch: pytest.MonkeyPatch
         c.post("/tracks/7/assign", json={"playlist_db_id": 99})
 
     remove_mock.assert_not_awaited()
+
+
+# ---- token auth -----------------------------------------------------------
+
+
+def _token_ctx() -> MagicMock:
+    ctx = _make_ctx()
+    ctx.settings.sidecar_auth_token = "s3cret"
+    return ctx
+
+
+def test_token_required_when_configured() -> None:
+    with _client(_token_ctx()) as c:
+        r = c.post("/likes/fetch")
+    assert r.status_code == 401
+
+
+def test_valid_token_accepted() -> None:
+    with _client(_token_ctx()) as c:
+        r = c.post("/likes/fetch", headers={"X-Aux-Token": "s3cret"})
+    assert r.status_code == 200
+
+
+def test_token_beats_a_forged_null_origin() -> None:
+    """A sandboxed iframe on any site presents Origin: null — the token is what
+    actually keeps it out."""
+    with _client(_token_ctx()) as c:
+        r = c.post("/likes/fetch", headers={"Origin": "null"})
+    assert r.status_code == 401
+
+
+def test_health_stays_open_for_the_liveness_probe() -> None:
+    with _client(_token_ctx()) as c:
+        r = c.get("/health")
+    assert r.status_code == 200

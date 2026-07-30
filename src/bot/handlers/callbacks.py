@@ -166,11 +166,11 @@ def setup_callback_router(
             # the track in its old playlist while the DB believes it is free —
             # the next assignment would then put it in two playlists at once.
             client = spotify_clients.get(old_liked_by)
-            if client:
-                sp = await client.get_client()
-                await spotify_playlist.remove_track_from_playlist(
-                    sp, old_playlist_id, old_track_id
-                )
+            if not client:
+                await callback.answer("Spotify client не найден", show_alert=True)
+                return
+            sp = await client.get_client()
+            await spotify_playlist.remove_track_from_playlist(sp, old_playlist_id, old_track_id)
 
             await repos.assign_track_to_playlist(session, track_db_id, None, None, None)
             playlists = await repos.get_all_playlists(session)

@@ -19,7 +19,7 @@ NULL-ordering отличается — см. флаги в docstring tests/test_
 | TrackDownloader / zotify (`src/spotify/downloader.py`) | `test_downloader.py` | успех/перезапись/креды-флаг, rc≠0, нет файла, нет zotify, таймаут+kill, _find_audio | ревью 9/10 |
 | SpotifyClient токены (`src/spotify/client.py`) | `test_spotify_client.py` | reuse живого, refresh истёкшего, ротация refresh-токена persist, fallback на settings, unknown label | ревью 8/10 |
 | Репозитории (`src/db/repos.py`) | `test_repos.py` | все 15 функций; пины: no-op update_tokens, assigned_at при снятии, затирание telegram_message_id, пустые фильтры | ревью 9/10 |
-| Sidecar HTTP (`src/sidecar/app.py`) | `test_sidecar.py` | health/fetch/tracks(+passthrough)/playlists/assign(404/400/happy/дубль/перенос между плейлистами)/downloads/lifespan/origin-guard | ревью 9/10 |
+| Sidecar HTTP (`src/sidecar/app.py`) | `test_sidecar.py` | health/fetch/tracks(+passthrough)/playlists/assign(404/400/happy/дубль/перенос между плейлистами)/downloads/lifespan/origin-guard/токен (401, подделка `null`, открытый `/health`) | ревью 9/10 |
 | Плейлисты Spotify (`src/spotify/playlist.py`) | `test_playlist.py` | пагинация дедупа, терминация, add/remove, `move_track` (remove до add) | ревью 9/10; мутации 25/0 |
 | Жанровый каскад (`src/genre/*`) | `test_genre_resolver.py`, `test_genre_lookups.py`, `test_mapper.py` | маршрутизация уровней 1–3/manual, label once, квирк raw[0], батч sp.artists, genres→styles, строковые веса, приоритет маппера, единый Discogs-запрос | ревью 9/10; мутации 95/0 |
 | Общий resolve+store (`src/genre/pipeline.py`) | `test_genre_pipeline.py` | запись detected_genre/genre_source на реальной SQLite, manual-результат | — |
@@ -67,9 +67,10 @@ NULL-ordering отличается — см. флаги в docstring tests/test_
 
 ## Открытые баги (НЕ закреплены тестами — требуют решения)
 
-- `get_last_liked_at` на PostgreSQL: `ORDER BY liked_at DESC` ставит NULL
-  первыми → одна строка с пустым `liked_at` вернёт None вместо максимума
-  (портируемый фикс — `func.max`).
 - Бот не проверяет chat_id/user_id: любой, кто напишет боту, может дёрнуть
   `/fetch`, назначение и скачивание. Возможно, осознанно для приватного бота —
   требует решения владельца.
+- Сайдкар без `SIDECAR_AUTH_TOKEN` доверяет origin `null` (иначе не работает
+  упакованный рендерер на `file://`), а его же присылает sandboxed-iframe с
+  любого сайта. Electron-приложение токен генерирует само; для standalone-
+  запуска (VPS) его нужно прописать в `.env`.

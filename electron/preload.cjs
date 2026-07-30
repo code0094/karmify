@@ -6,4 +6,6 @@ const port = process.env.AUX_SIDECAR_PORT || "8765";
 
 contextBridge.exposeInMainWorld("aux", {
   sidecarUrl: `http://${host}:${port}`,
+  // Shared secret minted by the main process for this run (see main.js).
+  sidecarToken: process.env.AUX_SIDECAR_TOKEN || "",
 });

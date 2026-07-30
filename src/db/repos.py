@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import GenreAlias, GenrePlaylist, LikedTrack, SpotifyAccount
@@ -149,12 +149,11 @@ async def mark_track_downloaded(session: AsyncSession, track_id: int, download_p
 
 
 async def get_last_liked_at(session: AsyncSession, user_label: str) -> datetime | None:
-    """Get the most recent liked_at timestamp for a user."""
-    stmt = (
-        select(LikedTrack.liked_at)
-        .where(LikedTrack.liked_by == user_label)
-        .order_by(LikedTrack.liked_at.desc())
-        .limit(1)
-    )
+    """Get the most recent liked_at timestamp for a user.
+
+    MAX ignores NULLs on every backend; ORDER BY ... DESC LIMIT 1 would return
+    a NULL row first on PostgreSQL and report "no likes yet".
+    """
+    stmt = select(func.max(LikedTrack.liked_at)).where(LikedTrack.liked_by == user_label)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()

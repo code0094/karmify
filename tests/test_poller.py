@@ -169,5 +169,6 @@ async def test_poller_continues_when_on_new_track_fails() -> None:
     ):
         new_count = await poll_user_likes(client, factory, on_new_track)
 
-    assert seen == ["boom", "fine"]  # the failure did not abort the pass
+    # Oldest first, so the older "fine" is stored before the failing "boom".
+    assert seen == ["fine", "boom"]  # the failure did not abort the pass
     assert new_count == 2

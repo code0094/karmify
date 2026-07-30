@@ -12,6 +12,8 @@ import src.spotify.downloader as dlmod
 from src.config import Settings
 from src.spotify.downloader import DownloadError, TrackDownloader
 
+TRACK_ID = "3n3Ppam7vgaVa1iaRUc9Lp"  # 22-char Spotify base62 id
+
 
 class FakeProc:
     """Stand-in for an asyncio subprocess."""
@@ -64,12 +66,12 @@ async def test_download_success_moves_file_and_cleans_up(
     install_fake_exec(monkeypatch, FakeProc(), captured=captured)
     d = TrackDownloader(make_settings(download_dir=str(tmp_path)))
 
-    path = await d.download("t1")
+    path = await d.download(TRACK_ID)
 
     assert path == tmp_path / "ROD - Akephale.mp3"
     assert path.read_bytes() == b"a" * 64
-    assert not (tmp_path / ".part" / "t1").exists()
-    assert "https://open.spotify.com/track/t1" in captured
+    assert not (tmp_path / ".part" / TRACK_ID).exists()
+    assert f"https://open.spotify.com/track/{TRACK_ID}" in captured
     assert "--credentials-location" not in captured  # not configured
 
 
@@ -85,7 +87,7 @@ async def test_download_passes_credentials_when_configured(
         make_settings(download_dir=str(tmp_path), zotify_credentials_path="creds.json")
     )
 
-    await d.download("t1")
+    await d.download(TRACK_ID)
 
     assert "--credentials-location" in captured
     assert "creds.json" in captured
@@ -101,7 +103,7 @@ async def test_download_overwrites_existing_file(
     install_fake_exec(monkeypatch, FakeProc())
     d = TrackDownloader(make_settings(download_dir=str(tmp_path)))
 
-    path = await d.download("t1")
+    path = await d.download(TRACK_ID)
 
     assert path.read_bytes() == b"a" * 64
 
@@ -116,8 +118,8 @@ async def test_download_nonzero_exit(
     d = TrackDownloader(make_settings(download_dir=str(tmp_path)))
 
     with pytest.raises(DownloadError, match="кодом 2"):
-        await d.download("t1")
-    assert not (tmp_path / ".part" / "t1").exists()
+        await d.download(TRACK_ID)
+    assert not (tmp_path / ".part" / TRACK_ID).exists()
 
 
 @pytest.mark.asyncio
@@ -130,7 +132,7 @@ async def test_download_no_audio_produced(
     d = TrackDownloader(make_settings(download_dir=str(tmp_path)))
 
     with pytest.raises(DownloadError, match="не найден"):
-        await d.download("t1")
+        await d.download(TRACK_ID)
 
 
 @pytest.mark.asyncio
@@ -146,7 +148,7 @@ async def test_download_zotify_missing(
     d = TrackDownloader(make_settings(download_dir=str(tmp_path)))
 
     with pytest.raises(DownloadError, match="PATH"):
-        await d.download("t1")
+        await d.download(TRACK_ID)
 
 
 @pytest.mark.asyncio
@@ -162,7 +164,7 @@ async def test_download_timeout_kills_process(
     d = TrackDownloader(settings)
 
     with pytest.raises(DownloadError, match="таймаут"):
-        await d.download("t1")
+        await d.download(TRACK_ID)
     assert proc.killed
 
 
@@ -180,3 +182,14 @@ def test_find_audio_picks_largest(tmp_path: Path) -> None:
 
 def test_find_audio_empty(tmp_path: Path) -> None:
     assert TrackDownloader._find_audio(tmp_path) is None
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_unsafe_track_id(
+    make_settings: Callable[..., Settings], tmp_path: Path
+) -> None:
+    """The id becomes a directory that is later rmtree'd."""
+    d = TrackDownloader(make_settings(download_dir=str(tmp_path)))
+
+    with pytest.raises(DownloadError, match="недопустимый id"):
+        await d.download("../../etc")

@@ -13,6 +13,7 @@ timeouts plus a concurrency limit for free.
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 _AUDIO_EXTENSIONS = {".mp3", ".ogg", ".opus", ".m4a", ".aac", ".flac", ".wav"}
+_TRACK_ID_RE = re.compile(r"[A-Za-z0-9]{22}")  # Spotify base62 track id
 
 
 class DownloadError(Exception):
@@ -60,6 +62,11 @@ class TrackDownloader:
             return await self._run(spotify_track_id)
 
     async def _run(self, spotify_track_id: str) -> Path:
+        # The id becomes a directory name that is later rmtree'd — a value with
+        # separators or ".." would take that deletion outside download_dir.
+        if not _TRACK_ID_RE.fullmatch(spotify_track_id):
+            raise DownloadError(f"недопустимый id трека: {spotify_track_id!r}")
+
         s = self._settings
         self._dest.mkdir(parents=True, exist_ok=True)
 

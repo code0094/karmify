@@ -75,9 +75,18 @@ class Settings(BaseSettings):
     sidecar_allowed_origins: str = Field(
         default="http://localhost:5173,http://127.0.0.1:5173",
         description=(
-            "Comma-separated browser origins allowed to call the sidecar. The packaged "
-            "renderer loads from file:// and sends Origin: null, which is always allowed; "
-            "requests with no Origin (curl, the Electron main process) are unaffected."
+            "Comma-separated browser origins allowed to call the sidecar. Requests with "
+            "no Origin (curl, the Electron main process) are unaffected."
+        ),
+    )
+    sidecar_auth_token: str = Field(
+        default="",
+        description=(
+            "Shared secret required in the X-Aux-Token header. The Electron main process "
+            "generates one per run and passes it to both the sidecar and the renderer. "
+            "Leave blank only for a trusted local setup: without it the packaged renderer "
+            "has to be trusted by its opaque 'null' origin, which any sandboxed iframe "
+            "on any website can also present."
         ),
     )
 

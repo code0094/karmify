@@ -54,9 +54,10 @@ class AppContext:
         self.downloader = TrackDownloader(settings)
         self.library = LibraryManager(settings.library_dir)
         self.sources = self._build_sources()
-        # Track ids with a download in flight — a second click must not start
-        # a parallel fetch of the same track.
+        # Downloads in flight — a second click must not start a parallel fetch
+        # of the same track (by liked-track id) or search result (by ref).
         self._downloading: set[int] = set()
+        self._downloading_refs: set[str] = set()
 
     def _build_sources(self) -> dict[str, MusicSource]:
         """Construct the available music sources based on configuration."""
@@ -110,17 +111,18 @@ class AppContext:
 
     async def download_liked_track(self, track_id: int, *, source: str = "spotify") -> Path:
         """Download a liked track's audio, copy to library, mark it downloaded."""
+        # Claim the slot before the first await: with a check-then-add split by
+        # awaits, two concurrent clicks both pass the check and download twice.
         if track_id in self._downloading:
             raise SourceError(f"Track {track_id} is already being downloaded")
-
-        async with self.session_factory() as session:
-            track = await repos.get_track_by_id(session, track_id)
-        if track is None:
-            raise SourceError(f"Track {track_id} not found")
-
-        src = self._require_source(source)
         self._downloading.add(track_id)
         try:
+            async with self.session_factory() as session:
+                track = await repos.get_track_by_id(session, track_id)
+            if track is None:
+                raise SourceError(f"Track {track_id} not found")
+
+            src = self._require_source(source)
             result = await self._resolve_candidate(src, source, track)
             path = await src.download(result, Path(self.settings.download_dir))
         finally:
@@ -168,8 +170,15 @@ class AppContext:
 
     async def download_result(self, result: SearchResult) -> Path:
         """Download an arbitrary search result and copy it into the library."""
-        src = self._require_source(result.source)
-        path = await src.download(result, Path(self.settings.download_dir))
+        if result.download_ref in self._downloading_refs:
+            raise SourceError(f"Already downloading {result.download_ref}")
+        self._downloading_refs.add(result.download_ref)
+        try:
+            src = self._require_source(result.source)
+            path = await src.download(result, Path(self.settings.download_dir))
+        finally:
+            self._downloading_refs.discard(result.download_ref)
+
         self.library.add(path)
         return path
 

@@ -2,16 +2,21 @@ import type { Playlist, SearchResult, Track, TrackFilters } from "./types";
 
 declare global {
   interface Window {
-    aux?: { sidecarUrl: string };
+    aux?: { sidecarUrl: string; sidecarToken?: string };
   }
 }
 
 const BASE = window.aux?.sidecarUrl ?? "http://127.0.0.1:8765";
+const TOKEN = window.aux?.sidecarToken ?? "";
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (body) headers["Content-Type"] = "application/json";
+  if (TOKEN) headers["X-Aux-Token"] = TOKEN;
+
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {

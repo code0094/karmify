@@ -112,14 +112,23 @@ async def main() -> None:
     # Start polling for Telegram updates
     polling_task = asyncio.create_task(dp.start_polling(bot))
 
-    # Wait for shutdown signal (or Ctrl+C on platforms without signal handlers)
+    # Wait for a shutdown signal — or for polling to die on its own (a bad token
+    # would otherwise leave the process hanging here with the error unread).
+    shutdown_task = asyncio.create_task(shutdown_event.wait())
     try:
-        await shutdown_event.wait()
+        done, _ = await asyncio.wait(
+            {polling_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if polling_task in done and (exc := polling_task.exception()):
+            logger.error("polling.stopped", error=str(exc))
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("shutdown.interrupted")
     finally:
         logger.info("shutdown.stopping")
+        shutdown_task.cancel()
         polling_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await polling_task
         await bot.session.close()
         await engine.dispose()
         logger.info("shutdown.done")

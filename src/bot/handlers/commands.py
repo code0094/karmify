@@ -90,7 +90,8 @@ def setup_command_router(
                 if arg == "all":
                     days = 0
                 elif arg.isdigit():
-                    days = int(arg)
+                    # Capped: timedelta overflows on absurd values like 1e10.
+                    days = min(int(arg), 3650)
 
         period_label = f"last {days} days" if days > 0 else "all time"
         since = datetime.now(tz=UTC) - timedelta(days=days) if days > 0 else None

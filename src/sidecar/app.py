@@ -95,12 +95,24 @@ def create_app(context: AppContext) -> FastAPI:
     # playlist writes) — CORS alone does not help, since simple requests are
     # sent before the response is rejected. Block foreign browser origins here.
     allowed_origins = context.settings.allowed_origins()
+    auth_token = context.settings.sidecar_auth_token
 
     @app.middleware("http")
-    async def reject_foreign_origins(request: Request, call_next):  # type: ignore[no-untyped-def]
+    async def guard_requests(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if request.url.path == "/health":  # liveness probe for the Electron main process
+            return await call_next(request)
+
+        if auth_token:
+            if request.headers.get("x-aux-token") != auth_token:
+                logger.warning("sidecar.token_rejected", path=request.url.path)
+                return JSONResponse(status_code=401, content={"detail": "Invalid token"})
+            return await call_next(request)
+
+        # No token configured: fall back to origin filtering. "null" has to be
+        # accepted for the packaged renderer (file://), but note that a
+        # sandboxed iframe on any site presents the same opaque origin — which
+        # is exactly why the token is the supported setup.
         origin = request.headers.get("origin")
-        # No Origin: a non-browser client (curl, the Electron main process).
-        # "null": the packaged renderer loaded from file://.
         if origin is not None and origin != "null" and origin not in allowed_origins:
             logger.warning("sidecar.origin_rejected", origin=origin, path=request.url.path)
             return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
