@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from src.config import Settings
-from src.db.models import GenrePlaylist, LikedTrack
+from src.db.models import Base, GenrePlaylist, LikedTrack
 
 # Minimal required settings (everything except the optional groups).
 _REQUIRED_SETTINGS: dict[str, Any] = {
@@ -33,6 +35,24 @@ def make_settings() -> Callable[..., Settings]:
         return Settings(_env_file=None, **{**_REQUIRED_SETTINGS, **overrides})
 
     return _make
+
+
+@pytest.fixture
+async def db_session() -> AsyncIterator[AsyncSession]:
+    """Real in-memory SQLite session with the full schema created.
+
+    Prod runs PostgreSQL; SQLite here verifies query logic, not PG specifics
+    (`SELECT FOR UPDATE` is not rendered by the SQLite dialect, and
+    ``DateTime(timezone=True)`` comes back naive). StaticPool is required so
+    ``create_all`` and the session share the same in-memory database.
+    """
+    engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        yield session
+    await engine.dispose()
 
 
 @pytest.fixture
