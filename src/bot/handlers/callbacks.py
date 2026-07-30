@@ -10,6 +10,7 @@ Callback data format:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -102,17 +103,18 @@ def setup_callback_router(
                 return
 
             assigned_by = callback.from_user.username or str(callback.from_user.id)
+            message = _editable(callback)
             await repos.assign_track_to_playlist(
                 session,
                 track_db_id,
                 playlist.playlist_id,
                 assigned_by,
-                message.message_id if (message := _editable(callback)) else None,
+                message.message_id if message else None,
             )
 
         await callback.answer(f"✅ Добавлено в {playlist.display_name}!")
 
-        if message := _editable(callback):
+        if message:
             await message.edit_reply_markup(
                 reply_markup=build_reassign_keyboard(
                     track_db_id, downloaded=track.downloaded_at is not None
@@ -233,31 +235,43 @@ def setup_callback_router(
                 await message.reply("❌ Не удалось скачать: внутренняя ошибка")
             return
 
-        async with session_factory() as session:
-            await repos.mark_track_downloaded(session, track_db_id, str(path))
-            fresh = await repos.get_track_by_id(session, track_db_id)
-            playlists = await repos.get_all_playlists(session)
+        # Nothing below may raise unguarded: this runs as a background task, so
+        # an escaping error would never reach a caller and would only surface in
+        # asyncio's default handler when the task is collected.
+        try:
+            async with session_factory() as session:
+                await repos.mark_track_downloaded(session, track_db_id, str(path))
+                fresh = await repos.get_track_by_id(session, track_db_id)
+                playlists = await repos.get_all_playlists(session)
 
-        size_mb = path.stat().st_size / (1024 * 1024)
-        message = _editable(callback)
-        if settings.download_send_to_chat and message:
-            if size_mb <= settings.telegram_upload_limit_mb:
-                await message.answer_audio(FSInputFile(path))
-            else:
-                await message.reply(
-                    f"✅ Скачано в библиотеку ({size_mb:.0f} МБ — велик для Telegram):\n{path}"
-                )
+            size_mb = path.stat().st_size / (1024 * 1024)
+            message = _editable(callback)
+            if settings.download_send_to_chat and message:
+                if size_mb <= settings.telegram_upload_limit_mb:
+                    await message.answer_audio(FSInputFile(path))
+                else:
+                    await message.reply(
+                        f"✅ Скачано в библиотеку ({size_mb:.0f} МБ — велик для Telegram):\n{path}"
+                    )
 
-        # Refresh the keyboard to mark the track as downloaded.
-        if message:
-            if fresh and fresh.assigned_playlist_id:
-                keyboard = build_reassign_keyboard(track_db_id, downloaded=True)
-            else:
-                keyboard = build_full_playlist_keyboard(track_db_id, playlists, downloaded=True)
-            try:
-                await message.edit_reply_markup(reply_markup=keyboard)
-            except TelegramBadRequest:
-                logger.debug("download.markup_unchanged", track=spotify_track_id)
+            # Refresh the keyboard to mark the track as downloaded.
+            if message:
+                if fresh and fresh.assigned_playlist_id:
+                    keyboard = build_reassign_keyboard(track_db_id, downloaded=True)
+                else:
+                    keyboard = build_full_playlist_keyboard(
+                        track_db_id, playlists, downloaded=True
+                    )
+                try:
+                    await message.edit_reply_markup(reply_markup=keyboard)
+                except TelegramBadRequest:
+                    logger.debug("download.markup_unchanged", track=spotify_track_id)
+        except Exception:
+            logger.exception("download.delivery_failed", track=spotify_track_id, path=str(path))
+            if message := _editable(callback):
+                with contextlib.suppress(Exception):
+                    await message.reply(f"⚠️ Скачано в библиотеку, но не доставлено:\n{path}")
+            return
 
         logger.info("download.delivered", track=spotify_track_id, size_mb=round(size_mb, 1))
 

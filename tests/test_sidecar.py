@@ -295,3 +295,43 @@ def test_no_origin_header_is_allowed() -> None:
     with _client(_make_ctx()) as c:
         r = c.get("/health")
     assert r.status_code == 200
+
+
+def test_assign_moves_track_between_playlists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-assigning must remove the track from the old Spotify playlist —
+    otherwise it stays in both while the DB records only the new one."""
+    ctx, add_mock, _assign_mock, sp = _assign_ctx(monkeypatch)
+    assigned = LikedTrack(
+        id=7,
+        spotify_track_id="t1",
+        liked_by="karma",
+        assigned_playlist_id="pl_old",
+    )
+    monkeypatch.setattr(appmod.repos, "get_track_by_id", AsyncMock(return_value=assigned))
+    remove_mock = AsyncMock()
+    monkeypatch.setattr(appmod.spotify_playlist, "remove_track_from_playlist", remove_mock)
+
+    with _client(ctx) as c:
+        r = c.post("/tracks/7/assign", json={"playlist_db_id": 99})
+
+    assert r.status_code == 200
+    remove_mock.assert_awaited_once_with(sp, "pl_old", "t1")
+    add_mock.assert_awaited_once_with(sp, "pl_spotify_id", "t1")
+
+
+def test_assign_to_same_playlist_does_not_remove(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx, _add_mock, _assign_mock, _sp = _assign_ctx(monkeypatch)
+    assigned = LikedTrack(
+        id=7,
+        spotify_track_id="t1",
+        liked_by="karma",
+        assigned_playlist_id="pl_spotify_id",  # already there
+    )
+    monkeypatch.setattr(appmod.repos, "get_track_by_id", AsyncMock(return_value=assigned))
+    remove_mock = AsyncMock()
+    monkeypatch.setattr(appmod.spotify_playlist, "remove_track_from_playlist", remove_mock)
+
+    with _client(ctx) as c:
+        c.post("/tracks/7/assign", json={"playlist_db_id": 99})
+
+    remove_mock.assert_not_awaited()

@@ -31,13 +31,15 @@ NULL-ordering отличается — см. флаги в docstring tests/test_
 | Бот: клавиатуры (`src/bot/keyboards.py`) | `test_bot_callbacks.py` | ✨-маркер, «Другой…», download-кнопка, лимит 64 байта callback_data (даты до текущего захода) | — |
 | Бот: команды (`src/bot/handlers/commands.py`) | `test_bot_commands.py` | /stats на реальной SQLite (парсинг периода, счётчики, фильтр по дате; **xfail: notin_-баг авто-счётчика**), /fetch (успех/ноль/ошибка) | ревью — см. журнал |
 | Бот: нотификации (`src/bot/notifications.py`) | `test_bot_notifications.py` | текст (Label/Detected), выбор клавиатуры по match, message_id/chat_id | ревью — см. журнал |
+| Бот: download-callback (`src/bot/handlers/callbacks.py`) | `test_bot_download_callback.py` | доставка аудио + отметка в БД, ошибка доставки не тонет в фоновой задаче, повторное скачивание отклоняется | — |
 
 ## Не покрыто (осознанно)
 
 - `src/sources/bandcamp_source.py` — селекторы не сверены с живым сайтом;
   тесты закрепили бы выдумку. Сначала живая проверка потока.
-- `src/bot/handlers/callbacks.py` — хендлеры кнопок (клавиатуры покрыты).
-  Бэклог топ-3: happy path assign, guard дабл-клика, дедлайн 24ч у reassign.
+- `src/bot/handlers/callbacks.py` — assign/reassign/expand (download-флоу и
+  клавиатуры покрыты). Бэклог топ-3: happy path assign, guard дабл-клика,
+  дедлайн 24ч у reassign.
 - `electron/` (renderer, TS) — тест-инфры нет (нужен vitest — отдельное решение).
 - `src/spotify/poller.py` — пагинация >50 лайков и остановка по last_liked_at
   покрыты слабо (только базовые случаи).
