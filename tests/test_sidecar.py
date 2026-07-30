@@ -24,6 +24,7 @@ def _make_ctx() -> MagicMock:
     ctx.session_factory = factory
 
     ctx.fetch_likes = AsyncMock(return_value=3)
+    ctx.settings.allowed_origins.return_value = ["http://localhost:5173"]
     return ctx
 
 
@@ -267,3 +268,30 @@ def test_lifespan_closes_context() -> None:
     with _client(ctx):
         pass
     ctx.aclose.assert_awaited_once()
+
+
+# ---- origin guard ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("origin", "allowed"),
+    [
+        ("http://localhost:5173", True),  # Vite dev server
+        ("null", True),  # packaged renderer loaded from file://
+        ("https://evil.example", False),  # drive-by from a random browser tab
+    ],
+)
+def test_origin_guard(origin: str, allowed: bool) -> None:
+    ctx = _make_ctx()
+    with _client(ctx) as c:
+        r = c.get("/health", headers={"Origin": origin})
+    assert (r.status_code == 200) is allowed
+    if not allowed:
+        assert r.status_code == 403
+
+
+def test_no_origin_header_is_allowed() -> None:
+    """Non-browser clients (curl, the Electron main process health check)."""
+    with _client(_make_ctx()) as c:
+        r = c.get("/health")
+    assert r.status_code == 200

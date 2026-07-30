@@ -104,21 +104,19 @@ async def test_stats_counts_users_manual_and_genre_order(db_session_factory: Fac
     assert answer.index("hardgroove") < answer.index("acid")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="known bug: notin_(['manual', None]) renders NOT IN ('manual', NULL) "
-    "which never matches — the auto counter is always 0",
-)
-async def test_stats_auto_count_desired_behavior(db_session_factory: Factory) -> None:
+async def test_stats_auto_count(db_session_factory: Factory) -> None:
+    """Regression: notin_(['manual', None]) rendered NOT IN ('manual', NULL),
+    which never matches — the auto counter used to be stuck at 0."""
     await _seed(db_session_factory, *_stats_seed())
     setup_command_router(db_session_factory, AsyncMock())
     msg = _message("/stats")
 
     await _get_handler("handle_stats")(msg)
 
-    # Desired: two spotify-resolved tracks count as automatically detected.
-    assert "Автоматически определено: 2" in msg.answer.await_args.args[0]
+    answer = msg.answer.await_args.args[0]
+    assert "Автоматически определено: 2" in answer
+    assert "(67%)" in answer  # 2 of 3
+    assert "Вручную: 1" in answer  # auto + manual must cover every track
 
 
 async def test_stats_period_filter_on_created_at(db_session_factory: Factory) -> None:

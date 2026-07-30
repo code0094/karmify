@@ -98,20 +98,18 @@ def _patch_cascade(
     mapper: AsyncMock,
     label: str | None = "Planet Rhythm",
 ) -> AsyncMock:
-    """Patch all cascade inputs; returns the get_label mock."""
+    """Patch all cascade inputs; returns the Discogs search mock."""
     monkeypatch.setattr(
         resolver_mod.spotify_genres,
         "get_artist_genres",
         AsyncMock(return_value=spotify or []),
     )
     monkeypatch.setattr(
-        resolver_mod.discogs_lookup, "search_genre", AsyncMock(return_value=discogs or [])
-    )
-    monkeypatch.setattr(
         resolver_mod.lastfm_tags, "get_top_tags", AsyncMock(return_value=lastfm or [])
     )
-    label_mock = AsyncMock(return_value=label)
-    monkeypatch.setattr(resolver_mod.discogs_lookup, "get_label", label_mock)
+    # One search returns both the level-2 tags and the label.
+    label_mock = AsyncMock(return_value=(discogs or [], label))
+    monkeypatch.setattr(resolver_mod.discogs_lookup, "search_release", label_mock)
     # NB: resolver imports map_to_genre_key by name — patch ITS namespace,
     # not src.genre.mapper (a from-import would never see that patch).
     monkeypatch.setattr(resolver_mod, "map_to_genre_key", mapper)
@@ -194,7 +192,7 @@ async def test_manual_still_carries_label_and_fetches_it_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """All levels return raws, none map: manual result still carries the label
-    (fetched exactly once, before the cascade)."""
+    (one Discogs search serves both the label and level 2)."""
     label_mock = _patch_cascade(
         monkeypatch,
         spotify=["a"],

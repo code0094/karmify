@@ -67,18 +67,13 @@ async def test_exactly_full_last_page_terminates() -> None:
     assert _offsets(sp) == [0, 100]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AttributeError,
-    reason="known bug: item['track']=None (deleted/unavailable Spotify tracks) "
-    "crashes track_in_playlist; desired behavior is to skip such items",
-)
 @pytest.mark.asyncio
 async def test_null_track_items_are_skipped() -> None:
+    """Regression: item['track']=None (deleted/unavailable Spotify tracks) used
+    to crash track_in_playlist."""
     sp = MagicMock()
     sp.playlist_tracks.return_value = {"items": [{"track": None}, {"track": {"id": "t1"}}]}
 
-    # Desired: the null item is skipped and the target AFTER it is still found.
     assert await track_in_playlist(sp, "pl", "t1") is True
 
 

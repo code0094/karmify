@@ -12,7 +12,7 @@ import pylast
 import pytest
 import spotipy
 
-from src.genre.discogs_lookup import get_label, search_genre
+from src.genre.discogs_lookup import get_label, search_genre, search_release
 from src.genre.lastfm_tags import get_top_tags
 from src.genre.spotify_genres import get_artist_genres
 
@@ -148,3 +148,18 @@ async def test_lastfm_other_exception_is_swallowed() -> None:
     network.get_track.side_effect = RuntimeError("api down")
 
     assert await get_top_tags(network, "ROD", "Akephale") == []
+
+
+@pytest.mark.asyncio
+async def test_search_release_returns_tags_and_label_in_one_query() -> None:
+    """Discogs allows 60 req/min: the cascade and the label share one search."""
+    client = _discogs_with_release(genres=["Electronic"], styles=["Hardgroove"])
+    label = MagicMock()
+    label.name = "Planet Rhythm"
+    client.search.return_value[0].labels = [label]
+
+    tags, found_label = await search_release(client, "ROD", "Akephale")
+
+    assert tags == ["Electronic", "Hardgroove"]
+    assert found_label == "Planet Rhythm"
+    client.search.assert_called_once()

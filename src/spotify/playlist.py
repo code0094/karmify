@@ -19,7 +19,9 @@ async def track_in_playlist(sp: spotipy.Spotify, playlist_id: str, track_id: str
         if not items:
             break
         for item in items:
-            if item.get("track", {}).get("id") == track_id:
+            # "track" is present but null for deleted/unavailable playlist entries.
+            track = item.get("track") or {}
+            if track.get("id") == track_id:
                 return True
         offset += 100
     return False

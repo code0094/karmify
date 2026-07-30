@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from src.db import repos
@@ -88,10 +89,26 @@ def create_app(context: AppContext) -> FastAPI:
 
     app = FastAPI(title="AUX DJ Sidecar", lifespan=lifespan)
 
+    # The sidecar listens on a fixed localhost port and has no authentication,
+    # so any page in the user's browser could otherwise drive it (downloads,
+    # playlist writes) — CORS alone does not help, since simple requests are
+    # sent before the response is rejected. Block foreign browser origins here.
+    allowed_origins = context.settings.allowed_origins()
+
+    @app.middleware("http")
+    async def reject_foreign_origins(request: Request, call_next):  # type: ignore[no-untyped-def]
+        origin = request.headers.get("origin")
+        # No Origin: a non-browser client (curl, the Electron main process).
+        # "null": the packaged renderer loaded from file://.
+        if origin is not None and origin != "null" and origin not in allowed_origins:
+            logger.warning("sidecar.origin_rejected", origin=origin, path=request.url.path)
+            return JSONResponse(status_code=403, content={"detail": "Origin not allowed"})
+        return await call_next(request)
+
     # Electron renderer (file:// or the Vite dev server) calls us cross-origin.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )

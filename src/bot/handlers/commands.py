@@ -115,18 +115,14 @@ def setup_command_router(
             )
             user_rows = (await session.execute(user_q)).all()
 
-            # Auto vs manual count
+            # Auto vs manual count. Never use in_/notin_ with None in the list:
+            # SQL compares NULL with =, so `x NOT IN ('manual', NULL)` is never
+            # true and `x IN (..., NULL)` never matches on the NULL entry.
+            is_manual = LikedTrack.genre_source.is_(None) | (LikedTrack.genre_source == "manual")
             auto_q = (
                 select(
-                    func.count()
-                    .filter(LikedTrack.genre_source.notin_(["manual", None]))
-                    .label("auto"),
-                    func.count()
-                    .filter(
-                        LikedTrack.genre_source.in_(["manual", None])
-                        | LikedTrack.genre_source.is_(None)
-                    )
-                    .label("manual"),
+                    func.count().filter(~is_manual).label("auto"),
+                    func.count().filter(is_manual).label("manual"),
                 )
                 .select_from(LikedTrack)
                 .where(base_filter)

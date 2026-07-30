@@ -72,6 +72,18 @@ class Settings(BaseSettings):
     # Sidecar HTTP API (consumed by the Electron desktop app)
     sidecar_host: str = Field(default="127.0.0.1", description="Sidecar bind host")
     sidecar_port: int = Field(default=8765, ge=1, le=65535, description="Sidecar bind port")
+    sidecar_allowed_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        description=(
+            "Comma-separated browser origins allowed to call the sidecar. The packaged "
+            "renderer loads from file:// and sends Origin: null, which is always allowed; "
+            "requests with no Origin (curl, the Electron main process) are unaffected."
+        ),
+    )
+
+    def allowed_origins(self) -> list[str]:
+        """Parse sidecar_allowed_origins into a list (blank entries dropped)."""
+        return [o.strip() for o in self.sidecar_allowed_origins.split(",") if o.strip()]
 
     # Local DJ library (watched folder imported by Rekordbox/Serato)
     library_dir: str = Field(

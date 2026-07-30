@@ -56,7 +56,14 @@ async def poll_user_likes(
                 stop = True
                 break
 
-            track_data = item["track"]
+            # Spotify sends "track": null for deleted/unavailable liked tracks.
+            # Crashing here would stall this user's cursor forever: poll_all_users
+            # swallows the error and last_liked_at never advances.
+            track_data = item.get("track")
+            if not track_data:
+                logger.info("poller.null_track_skipped", user=user_label, added_at=added_at_str)
+                continue
+
             track = LikedTrack(
                 spotify_track_id=track_data["id"],
                 track_name=track_data["name"],
