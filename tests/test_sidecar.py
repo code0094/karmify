@@ -383,3 +383,64 @@ def test_health_stays_open_for_the_liveness_probe() -> None:
     with _client(_token_ctx()) as c:
         r = c.get("/health")
     assert r.status_code == 200
+
+
+def test_preflight_with_null_origin_and_token_header() -> None:
+    """The packaged renderer (Origin: null) sends preflighted requests because
+    of X-Aux-Token — CORS must answer them or the browser blocks everything."""
+    with _client(_token_ctx()) as c:
+        r = c.options(
+            "/likes/fetch",
+            headers={
+                "Origin": "null",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-aux-token",
+            },
+        )
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin")
+
+
+def test_preflight_with_null_origin_without_token_mode() -> None:
+    """Same preflight must work in origin-filter mode: 'null' is in the CORS list."""
+    with _client(_make_ctx()) as c:
+        r = c.options(
+            "/likes/fetch",
+            headers={"Origin": "null", "Access-Control-Request-Method": "POST"},
+        )
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "null"
+
+
+def test_token_accepted_via_query_param() -> None:
+    """<audio src> cannot set headers — the audio route takes the token as query."""
+    with _client(_token_ctx()) as c:
+        r = c.post("/likes/fetch?token=s3cret")
+    assert r.status_code == 200
+
+
+def test_track_audio_serves_downloaded_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    audio = tmp_path / "akephale.mp3"
+    audio.write_bytes(b"ID3audio")
+    downloaded = LikedTrack(
+        id=7, spotify_track_id="t1", liked_by="karma", download_path=str(audio)
+    )
+    ctx = _make_ctx()
+    monkeypatch.setattr(appmod.repos, "get_track_by_id", AsyncMock(return_value=downloaded))
+
+    with _client(ctx) as c:
+        r = c.get("/tracks/7/audio")
+
+    assert r.status_code == 200
+    assert r.content == b"ID3audio"
+
+
+def test_track_audio_404_when_not_downloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _make_ctx()
+    monkeypatch.setattr(appmod.repos, "get_track_by_id", AsyncMock(return_value=_TRACK))
+
+    with _client(ctx) as c:
+        r = c.get("/tracks/7/audio")
+    assert r.status_code == 404

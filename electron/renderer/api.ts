@@ -26,6 +26,12 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+export function audioUrl(trackId: number): string {
+  // <audio src> cannot send the X-Aux-Token header — the token rides as a query param.
+  const qs = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
+  return `${BASE}/tracks/${trackId}/audio${qs}`;
+}
+
 export const api = {
   listTracks(filters: TrackFilters = {}): Promise<Track[]> {
     const params = new URLSearchParams();

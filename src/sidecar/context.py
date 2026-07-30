@@ -7,6 +7,7 @@ high-level operations (fetch likes, search, download) that the HTTP routes call.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -113,6 +114,7 @@ class AppContext:
         """Download a liked track's audio, copy to library, mark it downloaded."""
         # Claim the slot before the first await: with a check-then-add split by
         # awaits, two concurrent clicks both pass the check and download twice.
+        # Held until the DB write so the whole operation is single-flight.
         if track_id in self._downloading:
             raise SourceError(f"Track {track_id} is already being downloaded")
         self._downloading.add(track_id)
@@ -121,17 +123,20 @@ class AppContext:
                 track = await repos.get_track_by_id(session, track_id)
             if track is None:
                 raise SourceError(f"Track {track_id} not found")
+            if track.downloaded_at:
+                raise SourceError(f"Track {track_id} is already downloaded")
 
             src = self._require_source(source)
             result = await self._resolve_candidate(src, source, track)
             path = await src.download(result, Path(self.settings.download_dir))
+
+            # copy2 of a large FLAC would stall the event loop.
+            await asyncio.to_thread(self.library.add, path, subdir=track.detected_genre)
+
+            async with self.session_factory() as session:
+                await repos.mark_track_downloaded(session, track_id, str(path))
         finally:
             self._downloading.discard(track_id)
-
-        self.library.add(path, subdir=track.detected_genre)
-
-        async with self.session_factory() as session:
-            await repos.mark_track_downloaded(session, track_id, str(path))
         return path
 
     async def _resolve_candidate(
@@ -176,10 +181,9 @@ class AppContext:
         try:
             src = self._require_source(result.source)
             path = await src.download(result, Path(self.settings.download_dir))
+            await asyncio.to_thread(self.library.add, path)
         finally:
             self._downloading_refs.discard(result.download_ref)
-
-        self.library.add(path)
         return path
 
     def _require_source(self, source: str) -> MusicSource:

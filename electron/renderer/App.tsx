@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api";
+import { api, audioUrl } from "./api";
 import { LibraryTable } from "./components/LibraryTable";
 import { Player } from "./components/Player";
 import { SearchBar } from "./components/SearchBar";
@@ -62,7 +62,7 @@ export function App() {
 
   function onPlay(track: Track) {
     if (track.download_path) {
-      setPlayerSrc(`file://${track.download_path.replace(/\\/g, "/")}`);
+      setPlayerSrc(audioUrl(track.id));
     }
   }
 

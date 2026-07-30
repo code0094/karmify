@@ -213,3 +213,30 @@ async def test_soulseek_download_without_search_metadata_raises(
     with pytest.raises(SourceError, match="search result"):
         await src.download(bare, tmp_path / "out")
     client_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_soulseek_finds_files_with_glob_special_chars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Soulseek names are full of [FLAC]/(...) — rglob(pattern) would never match."""
+    downloads = tmp_path / "slskd"
+    downloads.mkdir()
+    name = "Track (Original Mix) [FLAC].flac"
+    (downloads / name).write_bytes(b"flac")
+
+    src = SoulseekSource("http://x", "key", str(downloads))
+    monkeypatch.setattr(src, "_client", lambda: MagicMock())
+    result = SearchResult(
+        source="soulseek",
+        title="t",
+        artist="u",
+        download_ref=rf"u|a\{name}",
+        size_bytes=4,
+        extra={"username": "u", "filename": rf"a\{name}"},
+    )
+
+    path = await src.download(result, tmp_path / "out")
+
+    assert path.name == name
+    assert path.read_bytes() == b"flac"

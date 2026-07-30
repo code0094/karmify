@@ -153,11 +153,15 @@ class SoulseekSource(MusicSource):
         raise SourceError(f"Soulseek download did not complete: {basename}")
 
     def _find_completed(self, basename: str) -> Path | None:
-        """Look for the finished file in slskd's downloads directory."""
+        """Look for the finished file in slskd's downloads directory.
+
+        Compared literally: Soulseek filenames are full of ``[FLAC]``/``(...)``,
+        which rglob would treat as glob syntax and never match.
+        """
         assert self._downloads_dir is not None
         if not self._downloads_dir.exists():
             return None
-        for path in self._downloads_dir.rglob(basename):
-            if path.is_file():
+        for path in self._downloads_dir.rglob("*"):
+            if path.is_file() and path.name == basename:
                 return path
         return None

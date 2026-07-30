@@ -28,6 +28,12 @@ function startSidecar() {
     env: { ...process.env, SIDECAR_AUTH_TOKEN: SIDECAR_TOKEN },
     stdio: "inherit",
   });
+  sidecar.on("error", (err) => {
+    // ENOENT (no python on PATH) would otherwise crash the main process
+    // as an unhandled 'error' event before the window even opens.
+    console.error(`[sidecar] failed to start: ${err.message}`);
+    sidecar = null;
+  });
   sidecar.on("exit", (code) => {
     console.log(`[sidecar] exited with code ${code}`);
     sidecar = null;

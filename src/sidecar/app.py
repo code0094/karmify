@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from src.db import repos
@@ -103,7 +105,12 @@ def create_app(context: AppContext) -> FastAPI:
             return await call_next(request)
 
         if auth_token:
-            if request.headers.get("x-aux-token") != auth_token:
+            # Query-param fallback exists for <audio src=...>, which cannot set
+            # headers. compare_digest keeps the check constant-time.
+            supplied = (
+                request.headers.get("x-aux-token") or request.query_params.get("token") or ""
+            )
+            if not secrets.compare_digest(supplied, auth_token):
                 logger.warning("sidecar.token_rejected", path=request.url.path)
                 return JSONResponse(status_code=401, content={"detail": "Invalid token"})
             return await call_next(request)
@@ -119,9 +126,13 @@ def create_app(context: AppContext) -> FastAPI:
         return await call_next(request)
 
     # Electron renderer (file:// or the Vite dev server) calls us cross-origin.
+    # The X-Aux-Token header makes every request preflighted, and the packaged
+    # renderer presents Origin: null — CORS must accept it or the browser blocks
+    # the response even though the guard above would have let it through. With a
+    # token the real boundary IS the token, so CORS can reflect any origin.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=allowed_origins,
+        allow_origins=["*"] if auth_token else [*allowed_origins, "null"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -187,6 +198,21 @@ def create_app(context: AppContext) -> FastAPI:
                 session, track_id, playlist.playlist_id, track.liked_by
             )
         return {"added": added}
+
+    @app.get("/tracks/{track_id}/audio")
+    async def track_audio(
+        track_id: int,
+        ctx: AppContext = Depends(get_context),
+    ) -> FileResponse:
+        """Stream a downloaded track's audio (the dev renderer cannot read file://)."""
+        async with ctx.session_factory() as session:
+            track = await repos.get_track_by_id(session, track_id)
+        if track is None or not track.download_path:
+            raise HTTPException(status_code=404, detail="Track has no downloaded audio")
+        path = Path(track.download_path)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Audio file missing on disk")
+        return FileResponse(path)
 
     @app.post("/tracks/{track_id}/download")
     async def download_track(
