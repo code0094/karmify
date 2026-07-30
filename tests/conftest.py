@@ -38,21 +38,28 @@ def make_settings() -> Callable[..., Settings]:
 
 
 @pytest.fixture
-async def db_session() -> AsyncIterator[AsyncSession]:
-    """Real in-memory SQLite session with the full schema created.
+async def db_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Real in-memory SQLite session factory with the full schema created.
 
     Prod runs PostgreSQL; SQLite here verifies query logic, not PG specifics
     (`SELECT FOR UPDATE` is not rendered by the SQLite dialect, and
     ``DateTime(timezone=True)`` comes back naive). StaticPool is required so
-    ``create_all`` and the session share the same in-memory database.
+    ``create_all`` and the sessions share the same in-memory database.
     """
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with factory() as session:
-        yield session
+    yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
+
+
+@pytest.fixture
+async def db_session(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """One session from db_session_factory (see its fidelity caveats)."""
+    async with db_session_factory() as session:
+        yield session
 
 
 @pytest.fixture
