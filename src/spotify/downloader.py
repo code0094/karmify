@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from src.sources.base import SourceError
+
 if TYPE_CHECKING:
     from src.config import Settings
 
@@ -29,8 +31,13 @@ _AUDIO_EXTENSIONS = {".mp3", ".ogg", ".opus", ".m4a", ".aac", ".flac", ".wav"}
 _TRACK_ID_RE = re.compile(r"[A-Za-z0-9]{22}")  # Spotify base62 track id
 
 
-class DownloadError(Exception):
-    """Raised when a track download fails."""
+class DownloadError(SourceError):
+    """Raised when a track download fails.
+
+    Subclasses :class:`SourceError` so transport layers that map source
+    failures (the sidecar's 502 handler) treat zotify failures the same way
+    as Soulseek/Bandcamp ones instead of bubbling a bare 500.
+    """
 
 
 class TrackDownloader:

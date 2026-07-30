@@ -41,7 +41,7 @@ export function LibraryTable({
             <td style={cell}>{t.liked_by}</td>
             <td style={cell}>
               <select
-                defaultValue=""
+                value=""
                 onChange={(e) => e.target.value && onAssign(t.id, Number(e.target.value))}
               >
                 <option value="" disabled>

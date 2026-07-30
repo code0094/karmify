@@ -28,7 +28,6 @@ class SpotifyClient:
         self.user_label = user_label
         self._settings = settings
         self._session_factory = session_factory
-        self._sp: spotipy.Spotify | None = None
         self._oauth = SpotifyOAuth(
             client_id=settings.spotify_client_id,
             client_secret=settings.spotify_client_secret,
@@ -75,5 +74,4 @@ class SpotifyClient:
             refresh_token = account.refresh_token if account else self._get_refresh_token()
             access_token = await self._refresh_and_store(refresh_token)
 
-        self._sp = spotipy.Spotify(auth=access_token)
-        return self._sp
+        return spotipy.Spotify(auth=access_token)

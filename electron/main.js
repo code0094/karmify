@@ -25,7 +25,14 @@ function startSidecar() {
   const python = process.env.AUX_PYTHON || "python";
   sidecar = spawn(python, ["-m", "src.sidecar.app"], {
     cwd: PROJECT_ROOT,
-    env: { ...process.env, SIDECAR_AUTH_TOKEN: SIDECAR_TOKEN },
+    env: {
+      ...process.env,
+      SIDECAR_AUTH_TOKEN: SIDECAR_TOKEN,
+      // pydantic reads SIDECAR_HOST/PORT (no AUX_ prefix): forward the values
+      // Electron connects to, or an AUX_SIDECAR_PORT override binds nothing.
+      SIDECAR_HOST: SIDECAR_HOST,
+      SIDECAR_PORT: SIDECAR_PORT,
+    },
     stdio: "inherit",
   });
   sidecar.on("error", (err) => {

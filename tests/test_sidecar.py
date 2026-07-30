@@ -476,3 +476,23 @@ def test_tracks_limit_bounds() -> None:
     with _client(_make_ctx()) as c:
         assert c.get("/tracks?limit=0").status_code == 422
         assert c.get("/tracks?limit=100000").status_code == 422
+
+
+def test_zotify_failure_maps_to_502() -> None:
+    """DownloadError is a SourceError: zotify failures must not bubble as 500."""
+    from src.spotify.downloader import DownloadError
+
+    ctx = _make_ctx()
+    ctx.download_liked_track = AsyncMock(side_effect=DownloadError("zotify не найден в PATH"))
+
+    with _client(ctx) as c:
+        r = c.post("/tracks/5/download", json={"source": "spotify"})
+    assert r.status_code == 502
+    assert "zotify" in r.json()["detail"]
+
+
+def test_non_ascii_token_is_rejected_not_crashing() -> None:
+    """str compare_digest requires ASCII — a 0xFF header byte must 401, not 500."""
+    with _client(_token_ctx()) as c:
+        r = c.post("/likes/fetch", headers={b"x-aux-token": b"\xff\xfe"})
+    assert r.status_code == 401

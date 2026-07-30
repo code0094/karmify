@@ -116,7 +116,9 @@ def create_app(context: AppContext) -> FastAPI:
             # (they end up in access logs). compare_digest is constant-time.
             if not supplied and request.method == "GET" and _is_audio_path(request.url.path):
                 supplied = request.query_params.get("token") or ""
-            if not secrets.compare_digest(supplied, auth_token):
+            # Bytes: str compare_digest requires ASCII, and headers arrive
+            # latin-1-decoded — a non-ASCII byte would raise instead of 401.
+            if not secrets.compare_digest(supplied.encode(), auth_token.encode()):
                 logger.warning("sidecar.token_rejected", path=request.url.path)
                 return JSONResponse(status_code=401, content={"detail": "Invalid token"})
             return await call_next(request)
