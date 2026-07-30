@@ -91,7 +91,10 @@ def mock_discogs() -> MagicMock:
     result = MagicMock()
     result.genres = ["Electronic"]
     result.styles = ["Hardgroove", "Techno"]
-    result.labels = [MagicMock(name="Planet Rhythm")]
+    # NB: MagicMock(name=...) sets the MOCK's name, not .name — build explicitly.
+    label = MagicMock()
+    label.name = "Planet Rhythm"
+    result.labels = [label]
     result.count = 1
     search_results = MagicMock()
     search_results.__getitem__ = MagicMock(return_value=result)
