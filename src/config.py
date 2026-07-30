@@ -11,9 +11,10 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # Telegram
-    telegram_bot_token: str
-    telegram_chat_id: int
+    # Telegram (optional — required only by the bot entrypoint, src.main;
+    # the sidecar runs without it)
+    telegram_bot_token: str = ""
+    telegram_chat_id: int = 0
 
     # Spotify (shared app credentials)
     spotify_client_id: str

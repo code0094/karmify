@@ -2,12 +2,37 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from src.config import Settings
 from src.db.models import GenrePlaylist, LikedTrack
+
+# Minimal required settings (everything except the optional groups).
+_REQUIRED_SETTINGS: dict[str, Any] = {
+    "spotify_client_id": "cid",
+    "spotify_client_secret": "secret",
+    "karma_spotify_refresh_token": "rt-karma",
+    "stress303_spotify_refresh_token": "rt-stress",
+    "discogs_user_token": "discogs-token",
+    "lastfm_api_key": "lastfm-key",
+    "lastfm_api_secret": "lastfm-secret",
+    "database_url": "postgresql+asyncpg://user:pass@localhost:5432/test",
+}
+
+
+@pytest.fixture
+def make_settings() -> Callable[..., Settings]:
+    """Build a valid Settings object without reading .env; override via kwargs."""
+
+    def _make(**overrides: Any) -> Settings:
+        return Settings(_env_file=None, **{**_REQUIRED_SETTINGS, **overrides})
+
+    return _make
 
 
 @pytest.fixture

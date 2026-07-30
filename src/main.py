@@ -36,6 +36,12 @@ async def main() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
 
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        raise SystemExit(
+            "Telegram credentials (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) are required "
+            "for the bot entrypoint. The sidecar (python -m src.sidecar.app) runs without them."
+        )
+
     # Database
     engine, session_factory = build_engine(settings)
 
