@@ -93,7 +93,8 @@ async def test_no_account_falls_back_to_settings_token(
     client: SpotifyClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(clientmod.repos, "get_account", AsyncMock(return_value=None))
-    monkeypatch.setattr(clientmod.repos, "update_tokens", AsyncMock())
+    update = AsyncMock()
+    monkeypatch.setattr(clientmod.repos, "update_tokens", update)
 
     seen: dict[str, Any] = {}
 
@@ -107,6 +108,10 @@ async def test_no_account_falls_back_to_settings_token(
 
     assert sp.auth == "first"  # type: ignore[attr-defined]
     assert seen["refresh_token"] == "rt-karma"  # from Settings (conftest)
+    # Spotify ROTATED the refresh token — losing it would kill the account:
+    # the rotated value, not the input one, must be persisted.
+    update.assert_awaited_once()
+    assert update.await_args.kwargs["refresh_token"] == "rotated"
 
 
 def test_unknown_user_label_raises(

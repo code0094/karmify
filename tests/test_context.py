@@ -1,8 +1,8 @@
 """Tests for AppContext: source registry and high-level operations.
 
-AppContext is constructed for real (its constructor is offline: lazy DB engine,
-offline OAuth/discogs/pylast objects); only the DB repo calls and the sources
-themselves are substituted.
+AppContext is constructed for real (no network I/O in the constructor: the DB
+engine is created but never connects, OAuth/discogs/pylast are plain config
+objects); only the DB repo calls and the sources themselves are substituted.
 """
 
 from __future__ import annotations
@@ -46,6 +46,12 @@ def test_soulseek_enabled_by_config(make_settings: Callable[..., Settings]) -> N
         make_settings(slskd_url="http://x", slskd_api_key="k", slskd_downloads_dir="dl")
     )
     assert set(ctx.sources) == {"spotify", "soulseek"}
+
+
+def test_partial_soulseek_config_is_ignored(make_settings: Callable[..., Settings]) -> None:
+    """URL without an API key must not enable the source (and must not crash)."""
+    ctx = AppContext(make_settings(slskd_url="http://x"))
+    assert set(ctx.sources) == {"spotify"}
 
 
 def test_bandcamp_enabled_by_config(make_settings: Callable[..., Settings]) -> None:
