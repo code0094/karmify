@@ -71,7 +71,8 @@ class DownloadResultBody(BaseModel):
 
 def get_context(request: Request) -> AppContext:
     """FastAPI dependency: the shared :class:`AppContext`."""
-    return request.app.state.context
+    context: AppContext = request.app.state.context
+    return context
 
 
 def create_app(context: AppContext) -> FastAPI:

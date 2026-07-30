@@ -77,3 +77,8 @@ testpaths = ["tests"]
 python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
+
+# Third-party clients that ship no stubs / py.typed marker.
+[[tool.mypy.overrides]]
+module = ["spotipy.*", "discogs_client.*", "slskd_api.*", "nodriver.*", "pylast.*"]
+ignore_missing_imports = true

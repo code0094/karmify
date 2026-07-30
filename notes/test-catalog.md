@@ -6,6 +6,8 @@
 (cosmic-ray), где отмечен.
 
 Запуск: `.venv/Scripts/python -m pytest -q` (Windows) / `pytest -q`.
+Полный гейт качества: `pytest -q` + `ruff check .` + `ruff format --check .` +
+`mypy src` (strict, держится на нуле ошибок).
 Тестовая БД — in-memory SQLite (aiosqlite, dev-зависимость): проверяет логику
 запросов, НЕ Postgres-специфику (FOR UPDATE no-op, naive datetime,
 NULL-ordering отличается — см. флаги в docstring tests/test_repos.py).
@@ -19,7 +21,8 @@ NULL-ordering отличается — см. флаги в docstring tests/test_
 | Репозитории (`src/db/repos.py`) | `test_repos.py` | все 15 функций; пины: no-op update_tokens, assigned_at при снятии, затирание telegram_message_id, пустые фильтры | ревью 9/10 |
 | Sidecar HTTP (`src/sidecar/app.py`) | `test_sidecar.py` | health/fetch/tracks(+passthrough)/playlists/assign(404/400/happy/дубль)/downloads/lifespan | ревью 9/10 |
 | Плейлисты Spotify (`src/spotify/playlist.py`) | `test_playlist.py` | пагинация дедупа, терминация, add/remove; **xfail: краш на track=null** | ревью 9/10; мутации 25/0 |
-| Жанровый каскад (`src/genre/*`) | `test_genre_resolver.py`, `test_genre_lookups.py`, `test_mapper.py` | маршрутизация уровней 1–3/manual, label once, квирк raw[0], батч sp.artists, genres→styles, строковые веса, приоритет маппера | ревью 9/10; мутации 95/0 |
+| Жанровый каскад (`src/genre/*`) | `test_genre_resolver.py`, `test_genre_lookups.py`, `test_mapper.py` | маршрутизация уровней 1–3/manual, label once, квирк raw[0], батч sp.artists, genres→styles, строковые веса, приоритет маппера, единый Discogs-запрос | ревью 9/10; мутации 95/0 |
+| Общий resolve+store (`src/genre/pipeline.py`) | `test_genre_pipeline.py` | запись detected_genre/genre_source на реальной SQLite, manual-результат | — |
 | Поллер лайков (`src/spotify/poller.py`) | `test_poller.py` | новый/существующий трек (даты до текущего захода) | — |
 | Soulseek download (`src/sources/soulseek_source.py`) | `test_sources.py` | search (ранее) + download: enqueue payload, сбор из вложенных папок, перезапись, poll-цикл, таймаут, guard downloads_dir | ревью 9/10; мутации 168/0 |
 | Mailbox / IMAP (`src/sources/mailbox.py`) | `test_mailbox.py` | wait-цикл (happy/poll/timeout), селективный \Seen, пустой UNSEEN, extract из plain и html | ревью 9/10; мутации 110/0 |
@@ -39,9 +42,19 @@ NULL-ordering отличается — см. флаги в docstring tests/test_
 - `src/spotify/poller.py` — пагинация >50 лайков и остановка по last_liked_at
   покрыты слабо (только базовые случаи).
 
-## Известные баги, закреплённые strict-xfail (НЕ чинить молча — см. флаги)
+## Починенные баги (xfail сняты, тесты стали регрессионными)
 
 - `test_playlist.py::test_null_track_items_are_skipped` — краш на
-  `"track": null` от Spotify.
-- `test_bot_commands.py::test_stats_auto_count_desired_behavior` —
-  `notin_(["manual", None])` никогда не совпадает, авто-счётчик всегда 0.
+  `"track": null` от Spotify (плюс тот же класс бага в поллере:
+  `test_poller.py::test_poller_skips_null_track_items`).
+- `test_bot_commands.py::test_stats_auto_count` — `notin_(["manual", None])`
+  никогда не совпадал, авто-счётчик всегда показывал 0.
+
+## Открытые баги (НЕ закреплены тестами — требуют решения)
+
+- `AppContext.download_liked_track(source="soulseek")` сломан: `SearchResult`
+  собирается без `extra`, `_download_blocking` читает только его → пустой
+  username и сырой `ValueError`.
+- `get_last_liked_at` на PostgreSQL: `ORDER BY liked_at DESC` ставит NULL
+  первыми → одна строка с пустым `liked_at` вернёт None вместо максимума
+  (портируемый фикс — `func.max`).

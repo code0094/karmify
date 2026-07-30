@@ -9,7 +9,7 @@ import structlog
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 
 from src.db.models import LikedTrack
 
@@ -97,7 +97,7 @@ def setup_command_router(
 
         async with session_factory() as session:
             # Base filter
-            base_filter = LikedTrack.created_at >= since if since else True
+            base_filter = LikedTrack.created_at >= since if since else true()
 
             # Total count
             total_q = select(func.count()).select_from(LikedTrack).where(base_filter)

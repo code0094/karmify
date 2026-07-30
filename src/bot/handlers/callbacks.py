@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import structlog
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from src.bot.keyboards import build_full_playlist_keyboard, build_reassign_keyboard
 from src.db import repos
@@ -24,6 +24,9 @@ from src.spotify import playlist as spotify_playlist
 from src.spotify.downloader import DownloadError
 
 if TYPE_CHECKING:
+    from collections.abc import Coroutine
+    from typing import Any
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from src.config import Settings
@@ -32,6 +35,22 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 router = Router()
+
+# Background download tasks. The event loop only keeps weak references to tasks,
+# so an unreferenced one can be garbage-collected mid-download.
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+def _spawn(coro: Coroutine[Any, Any, None]) -> None:
+    """Run a coroutine in the background, keeping a strong reference to it."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+def _editable(callback: CallbackQuery) -> Message | None:
+    """The callback's message when it is still accessible (old ones are not)."""
+    return callback.message if isinstance(callback.message, Message) else None
 
 
 def setup_callback_router(
@@ -88,13 +107,13 @@ def setup_callback_router(
                 track_db_id,
                 playlist.playlist_id,
                 assigned_by,
-                callback.message.message_id if callback.message else None,
+                message.message_id if (message := _editable(callback)) else None,
             )
 
         await callback.answer(f"✅ Добавлено в {playlist.display_name}!")
 
-        if callback.message:
-            await callback.message.edit_reply_markup(
+        if message := _editable(callback):
+            await message.edit_reply_markup(
                 reply_markup=build_reassign_keyboard(
                     track_db_id, downloaded=track.downloaded_at is not None
                 )
@@ -144,8 +163,8 @@ def setup_callback_router(
             sp = await client.get_client()
             await spotify_playlist.remove_track_from_playlist(sp, old_playlist_id, old_track_id)
 
-        if callback.message:
-            await callback.message.edit_reply_markup(
+        if message := _editable(callback):
+            await message.edit_reply_markup(
                 reply_markup=build_full_playlist_keyboard(
                     track_db_id, playlists, downloaded=downloaded
                 )
@@ -166,8 +185,8 @@ def setup_callback_router(
             track = await repos.get_track_by_id(session, track_db_id)
 
         downloaded = bool(track and track.downloaded_at)
-        if callback.message:
-            await callback.message.edit_reply_markup(
+        if message := _editable(callback):
+            await message.edit_reply_markup(
                 reply_markup=build_full_playlist_keyboard(
                     track_db_id, playlists, downloaded=downloaded
                 )
@@ -196,7 +215,7 @@ def setup_callback_router(
         # Downloading takes far longer than Telegram's ~15s callback window, so
         # ack immediately and run the actual download in a background task.
         await callback.answer("⏳ Скачиваю, это займёт время…")
-        asyncio.create_task(_run_download(callback, track_db_id, track.spotify_track_id))
+        _spawn(_run_download(callback, track_db_id, track.spotify_track_id))
 
     async def _run_download(
         callback: CallbackQuery, track_db_id: int, spotify_track_id: str
@@ -205,13 +224,13 @@ def setup_callback_router(
             path = await downloader.download(spotify_track_id)
         except DownloadError as exc:
             logger.warning("download.error", track=spotify_track_id, error=str(exc))
-            if callback.message:
-                await callback.message.reply(f"❌ Не удалось скачать: {exc}")
+            if message := _editable(callback):
+                await message.reply(f"❌ Не удалось скачать: {exc}")
             return
         except Exception:
             logger.exception("download.unexpected", track=spotify_track_id)
-            if callback.message:
-                await callback.message.reply("❌ Не удалось скачать: внутренняя ошибка")
+            if message := _editable(callback):
+                await message.reply("❌ Не удалось скачать: внутренняя ошибка")
             return
 
         async with session_factory() as session:
@@ -220,22 +239,23 @@ def setup_callback_router(
             playlists = await repos.get_all_playlists(session)
 
         size_mb = path.stat().st_size / (1024 * 1024)
-        if settings.download_send_to_chat and callback.message:
+        message = _editable(callback)
+        if settings.download_send_to_chat and message:
             if size_mb <= settings.telegram_upload_limit_mb:
-                await callback.message.answer_audio(FSInputFile(path))
+                await message.answer_audio(FSInputFile(path))
             else:
-                await callback.message.reply(
+                await message.reply(
                     f"✅ Скачано в библиотеку ({size_mb:.0f} МБ — велик для Telegram):\n{path}"
                 )
 
         # Refresh the keyboard to mark the track as downloaded.
-        if callback.message:
+        if message:
             if fresh and fresh.assigned_playlist_id:
                 keyboard = build_reassign_keyboard(track_db_id, downloaded=True)
             else:
                 keyboard = build_full_playlist_keyboard(track_db_id, playlists, downloaded=True)
             try:
-                await callback.message.edit_reply_markup(reply_markup=keyboard)
+                await message.edit_reply_markup(reply_markup=keyboard)
             except TelegramBadRequest:
                 logger.debug("download.markup_unchanged", track=spotify_track_id)
 

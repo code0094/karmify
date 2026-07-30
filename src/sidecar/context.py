@@ -13,12 +13,11 @@ from typing import TYPE_CHECKING
 import discogs_client
 import pylast
 import structlog
-from sqlalchemy import update
 
 from src.db import repos
 from src.db.engine import build_engine
 from src.db.models import LikedTrack
-from src.genre.resolver import GenreResult, resolve_genre
+from src.genre.pipeline import resolve_and_store_genre
 from src.library.manager import LibraryManager
 from src.sources.base import MusicSource, SearchResult, SourceError
 from src.sources.spotify_source import SpotifySource
@@ -94,25 +93,13 @@ class AppContext:
     async def _on_new_track(self, track: LikedTrack) -> None:
         """Resolve genre for a newly detected like and persist it (no Telegram)."""
         sp = await self.spotify_clients[track.liked_by].get_client()
-        genre_result: GenreResult = await resolve_genre(
-            track_id=track.spotify_track_id,
-            artist_name=track.artist_name or "",
-            track_name=track.track_name or "",
+        await resolve_and_store_genre(
+            track,
             sp=sp,
             discogs=self.discogs,
             lastfm=self.lastfm,
             session_factory=self.session_factory,
         )
-        async with self.session_factory() as session:
-            await session.execute(
-                update(LikedTrack)
-                .where(LikedTrack.id == track.id)
-                .values(
-                    detected_genre=genre_result.genre_key,
-                    genre_source=genre_result.source,
-                )
-            )
-            await session.commit()
 
     async def fetch_likes(self) -> int:
         """Poll Spotify for new likes for all users; returns count of new tracks."""

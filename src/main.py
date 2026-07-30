@@ -14,7 +14,6 @@ from functools import partial
 import discogs_client
 import pylast
 import structlog
-from sqlalchemy import update
 
 from src.bot.app import create_bot, create_dispatcher
 from src.bot.notifications import send_new_like_notification
@@ -22,7 +21,7 @@ from src.config import get_settings
 from src.db import repos
 from src.db.engine import build_engine
 from src.db.models import LikedTrack
-from src.genre.resolver import GenreResult, resolve_genre
+from src.genre.pipeline import resolve_and_store_genre
 from src.spotify.client import SpotifyClient
 from src.spotify.downloader import TrackDownloader
 from src.spotify.poller import poll_all_users
@@ -67,25 +66,15 @@ async def main() -> None:
         """Process a newly detected liked track: resolve genre and notify."""
         sp = await spotify_clients[track.liked_by].get_client()
 
-        genre_result: GenreResult = await resolve_genre(
-            track_id=track.spotify_track_id,
-            artist_name=track.artist_name or "",
-            track_name=track.track_name or "",
+        genre_result = await resolve_and_store_genre(
+            track,
             sp=sp,
             discogs=discogs,
             lastfm=lastfm,
             session_factory=session_factory,
         )
 
-        # Update track in DB with genre info
         async with session_factory() as session:
-            await session.execute(
-                update(LikedTrack)
-                .where(LikedTrack.id == track.id)
-                .values(detected_genre=genre_result.genre_key, genre_source=genre_result.source)
-            )
-            await session.commit()
-
             playlists = await repos.get_all_playlists(session)
 
         msg_id = await send_new_like_notification(
