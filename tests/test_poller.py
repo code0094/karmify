@@ -123,3 +123,51 @@ async def test_poller_skips_null_track_items() -> None:
 
     assert new_count == 1
     assert on_new_track.await_args.args[0].spotify_track_id == "ok"
+
+
+@pytest.mark.asyncio
+async def test_poller_continues_when_on_new_track_fails() -> None:
+    """The track is already committed, so track_exists() skips it forever after.
+
+    A failing genre resolution or Telegram notification must not cost the
+    remaining tracks their turn.
+    """
+    sp = MagicMock()
+    sp.current_user_saved_tracks.return_value = {
+        "items": [
+            {
+                "added_at": "2026-03-08T12:00:00Z",
+                "track": {"id": "boom", "name": "A", "artists": [{"name": "ROD"}]},
+            },
+            {
+                "added_at": "2026-03-08T11:00:00Z",
+                "track": {"id": "fine", "name": "B", "artists": [{"name": "ROD"}]},
+            },
+        ]
+    }
+
+    client = AsyncMock()
+    client.user_label = "karma"
+    client.get_client = AsyncMock(return_value=sp)
+
+    session = AsyncMock()
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    seen: list[str] = []
+
+    async def on_new_track(track):
+        seen.append(track.spotify_track_id)
+        if track.spotify_track_id == "boom":
+            raise RuntimeError("telegram down")
+
+    with (
+        patch("src.spotify.poller.repos.get_last_liked_at", return_value=None),
+        patch("src.spotify.poller.repos.track_exists", return_value=False),
+        patch("src.spotify.poller.repos.insert_liked_track", side_effect=lambda s, t: t),
+    ):
+        new_count = await poll_user_likes(client, factory, on_new_track)
+
+    assert seen == ["boom", "fine"]  # the failure did not abort the pass
+    assert new_count == 2

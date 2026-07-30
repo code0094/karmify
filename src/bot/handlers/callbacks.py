@@ -145,7 +145,12 @@ def setup_callback_router(
                 return
 
             if track.assigned_at:
-                deadline = track.assigned_at + timedelta(hours=24)
+                # PostgreSQL hands back an aware datetime, but a naive one must
+                # not raise here — comparing it to an aware "now" is a TypeError.
+                assigned_at = track.assigned_at
+                if assigned_at.tzinfo is None:
+                    assigned_at = assigned_at.replace(tzinfo=UTC)
+                deadline = assigned_at + timedelta(hours=24)
                 if datetime.now(tz=UTC) > deadline:
                     await callback.answer(
                         "Прошло больше 24ч, переназначение недоступно", show_alert=True
@@ -155,15 +160,20 @@ def setup_callback_router(
             old_playlist_id = track.assigned_playlist_id
             old_track_id = track.spotify_track_id
             old_liked_by = track.liked_by
+            downloaded = track.downloaded_at is not None
+
+            # Spotify first: clearing the DB before a failed removal would leave
+            # the track in its old playlist while the DB believes it is free —
+            # the next assignment would then put it in two playlists at once.
+            client = spotify_clients.get(old_liked_by)
+            if client:
+                sp = await client.get_client()
+                await spotify_playlist.remove_track_from_playlist(
+                    sp, old_playlist_id, old_track_id
+                )
 
             await repos.assign_track_to_playlist(session, track_db_id, None, None, None)
             playlists = await repos.get_all_playlists(session)
-
-        downloaded = track.downloaded_at is not None
-        client = spotify_clients.get(old_liked_by)
-        if client:
-            sp = await client.get_client()
-            await spotify_playlist.remove_track_from_playlist(sp, old_playlist_id, old_track_id)
 
         if message := _editable(callback):
             await message.edit_reply_markup(

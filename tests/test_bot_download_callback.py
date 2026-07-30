@@ -131,3 +131,52 @@ async def test_already_downloaded_track_is_rejected(
 
     downloader.download.assert_not_awaited()
     assert callback.answer.await_args.kwargs.get("show_alert") is True
+
+
+# ---- reassign ordering -----------------------------------------------------
+
+
+def _reassign_callback(track_db_id: int) -> MagicMock:
+    callback = _callback(track_db_id)
+    callback.data = f"r:{track_db_id}"
+    return callback
+
+
+async def test_reassign_removes_from_spotify_before_clearing_db(
+    db_session_factory: Factory,
+    make_settings: Callable[..., Settings],
+) -> None:
+    """Order matters: if the DB were cleared first and Spotify then failed, the
+    track would stay in its old playlist while the DB believed it was free."""
+    async with db_session_factory() as session:
+        track = await repos.insert_liked_track(
+            session, LikedTrack(spotify_track_id="t1", liked_by="karma")
+        )
+        await repos.assign_track_to_playlist(session, track.id, "pl_old", "karma")
+
+    db_state_at_removal: list[str | None] = []
+
+    async def remove(_sp: object, _playlist: str, _track: str) -> None:
+        async with db_session_factory() as session:
+            current = await repos.get_track_by_id(session, track.id)
+            db_state_at_removal.append(current.assigned_playlist_id if current else None)
+
+    client = MagicMock()
+    client.get_client = AsyncMock(return_value=object())
+    downloader = MagicMock()
+
+    router_settings = _settings(make_settings)
+    setup_callback_router(db_session_factory, {"karma": client}, downloader, router_settings)
+
+    original_remove = callbacks_mod.spotify_playlist.remove_track_from_playlist
+    callbacks_mod.spotify_playlist.remove_track_from_playlist = remove  # type: ignore[assignment]
+    try:
+        await _get_handler("handle_reassign")(_reassign_callback(track.id))
+    finally:
+        callbacks_mod.spotify_playlist.remove_track_from_playlist = original_remove  # type: ignore[assignment]
+
+    assert db_state_at_removal == ["pl_old"]  # DB still intact during the Spotify call
+    async with db_session_factory() as session:
+        cleared = await repos.get_track_by_id(session, track.id)
+    assert cleared is not None
+    assert cleared.assigned_playlist_id is None

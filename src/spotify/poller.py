@@ -79,7 +79,17 @@ async def poll_user_likes(
                 track = await repos.insert_liked_track(session, track)
 
             new_count += 1
-            await on_new_track(track)
+            # The track is already committed, so track_exists() will skip it on
+            # every later poll: a failure here would silently cost it its genre
+            # and its notification forever. Log and keep going.
+            try:
+                await on_new_track(track)
+            except Exception:
+                logger.exception(
+                    "poller.on_new_track_failed",
+                    user=user_label,
+                    track=track.spotify_track_id,
+                )
 
         if stop or len(items) < 50:
             break
