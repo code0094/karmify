@@ -63,11 +63,11 @@ async def test_get_account_found_and_missing(db_session: AsyncSession) -> None:
     assert await repos.get_account(db_session, "stress303") is None
 
 
-async def test_update_tokens_persists(db_session: AsyncSession) -> None:
+async def test_save_tokens_persists(db_session: AsyncSession) -> None:
     account = _account()
     await _add(db_session, account)
 
-    await repos.update_tokens(
+    await repos.save_tokens(
         db_session,
         user_label="karma",
         access_token="new-acc",
@@ -81,21 +81,27 @@ async def test_update_tokens_persists(db_session: AsyncSession) -> None:
     assert account.token_expires_at == datetime(2027, 6, 1, 9, 30)
 
 
-async def test_update_tokens_unknown_user_is_silent_noop(db_session: AsyncSession) -> None:
-    """Pinned footgun: no error for a nonexistent user_label — callers can't rely on one."""
-    account = _account()
-    await _add(db_session, account)
+async def test_save_tokens_creates_missing_row(db_session: AsyncSession) -> None:
+    """Nothing else inserts into spotify_accounts: a plain UPDATE would no-op
+    on a fresh database and every call would hit Spotify's refresh endpoint."""
+    existing = _account()
+    await _add(db_session, existing)
 
-    await repos.update_tokens(
+    await repos.save_tokens(
         db_session,
-        user_label="ghost",
+        user_label="stress303",
         access_token="x",
         refresh_token="y",
         expires_at=datetime(2027, 1, 1),
     )
 
-    await db_session.refresh(account)
-    assert account.access_token == "acc"  # existing account untouched
+    created = await repos.get_account(db_session, "stress303")
+    assert created is not None
+    assert created.access_token == "x"
+    assert created.refresh_token == "y"
+
+    await db_session.refresh(existing)
+    assert existing.access_token == "acc"  # the other account is untouched
 
 
 # ---- liked tracks: insert / exists ---------------------------------------

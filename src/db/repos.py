@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import GenreAlias, GenrePlaylist, LikedTrack, SpotifyAccount
@@ -16,14 +17,19 @@ async def get_account(session: AsyncSession, user_label: str) -> SpotifyAccount 
     return result.scalar_one_or_none()
 
 
-async def update_tokens(
+async def save_tokens(
     session: AsyncSession,
     user_label: str,
     access_token: str,
     refresh_token: str,
     expires_at: datetime,
 ) -> None:
-    """Update OAuth tokens for a Spotify account."""
+    """Store OAuth tokens for a Spotify account, creating the row if needed.
+
+    Nothing else ever inserts into ``spotify_accounts``: a plain UPDATE here
+    would silently affect no rows on a fresh database, and every call would go
+    back to Spotify's refresh endpoint instead of reusing a stored token.
+    """
     stmt = (
         update(SpotifyAccount)
         .where(SpotifyAccount.user_label == user_label)
@@ -33,8 +39,26 @@ async def update_tokens(
             token_expires_at=expires_at,
         )
     )
-    await session.execute(stmt)
-    await session.commit()
+    result = await session.execute(stmt)
+    if cast("CursorResult[Any]", result).rowcount:
+        await session.commit()
+        return
+
+    session.add(
+        SpotifyAccount(
+            user_label=user_label,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_expires_at=expires_at,
+        )
+    )
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Another process inserted the row first — update it instead.
+        await session.rollback()
+        await session.execute(stmt)
+        await session.commit()
 
 
 async def track_exists(session: AsyncSession, spotify_track_id: str, liked_by: str) -> bool:

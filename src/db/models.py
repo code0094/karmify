@@ -17,7 +17,9 @@ class SpotifyAccount(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_label: Mapped[str] = mapped_column(String(50), unique=True)
-    spotify_user_id: Mapped[str] = mapped_column(String(255))
+    #: Not fetched anywhere yet — rows are created on the first token refresh,
+    #: when only the tokens themselves are known.
+    spotify_user_id: Mapped[str | None] = mapped_column(String(255))
     access_token: Mapped[str] = mapped_column(Text)
     refresh_token: Mapped[str] = mapped_column(Text)
     token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

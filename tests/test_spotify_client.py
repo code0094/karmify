@@ -8,9 +8,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import src.spotify.client as clientmod
 from src.config import Settings
+from src.db import repos
 from src.db.models import SpotifyAccount
 from src.spotify.client import SpotifyClient
 
@@ -51,7 +53,7 @@ async def test_valid_db_token_is_reused(
         clientmod.repos, "get_account", AsyncMock(return_value=_account(expires_in_hours=1))
     )
     refresh = AsyncMock()
-    monkeypatch.setattr(clientmod.repos, "update_tokens", refresh)
+    monkeypatch.setattr(clientmod.repos, "save_tokens", refresh)
 
     sp = await client.get_client()
 
@@ -67,7 +69,7 @@ async def test_expired_db_token_triggers_refresh(
         clientmod.repos, "get_account", AsyncMock(return_value=_account(expires_in_hours=-1))
     )
     update = AsyncMock()
-    monkeypatch.setattr(clientmod.repos, "update_tokens", update)
+    monkeypatch.setattr(clientmod.repos, "save_tokens", update)
 
     seen: dict[str, Any] = {}
 
@@ -94,7 +96,7 @@ async def test_no_account_falls_back_to_settings_token(
 ) -> None:
     monkeypatch.setattr(clientmod.repos, "get_account", AsyncMock(return_value=None))
     update = AsyncMock()
-    monkeypatch.setattr(clientmod.repos, "update_tokens", update)
+    monkeypatch.setattr(clientmod.repos, "save_tokens", update)
 
     seen: dict[str, Any] = {}
 
@@ -120,3 +122,35 @@ def test_unknown_user_label_raises(
     c = SpotifyClient("nobody", make_settings(), mock_session_factory)
     with pytest.raises(ValueError, match="nobody"):
         c._get_refresh_token()
+
+
+@pytest.mark.asyncio
+async def test_first_refresh_creates_the_account_row(
+    make_settings: Callable[..., Settings],
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end on a real (empty) database: the whole point of the class is
+    that the next call reuses a stored token instead of refreshing again."""
+    monkeypatch.setattr(clientmod.spotipy, "Spotify", FakeSpotify)
+    client = SpotifyClient("karma", make_settings(), db_session_factory)
+
+    refreshes: list[str] = []
+
+    def fake_refresh(refresh_token: str) -> dict[str, Any]:
+        refreshes.append(refresh_token)
+        return {"access_token": "fresh", "expires_in": 3600}
+
+    monkeypatch.setattr(client._oauth, "refresh_access_token", fake_refresh)
+
+    first = await client.get_client()
+    assert first.auth == "fresh"  # type: ignore[attr-defined]
+
+    async with db_session_factory() as session:
+        stored = await repos.get_account(session, "karma")
+    assert stored is not None, "the token row must be created on first refresh"
+    assert stored.access_token == "fresh"
+
+    second = await client.get_client()
+    assert second.auth == "fresh"  # type: ignore[attr-defined]
+    assert len(refreshes) == 1, "the stored token should be reused, not refreshed again"
