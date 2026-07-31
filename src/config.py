@@ -9,7 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """All configuration for AUX DJ Bot, loaded from env vars / .env file."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # extra="ignore": deployed .env files outlive the code — a key removed here
+    # (or added by a newer version) must not kill startup with extra_forbidden.
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Telegram (optional — required only by the bot entrypoint, src.main;
     # the sidecar runs without it)

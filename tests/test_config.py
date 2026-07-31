@@ -25,6 +25,13 @@ def test_settings_accept_telegram_when_provided(
     assert s.telegram_chat_id == -1001234567890
 
 
+def test_leftover_env_keys_are_ignored(make_settings: Callable[..., Settings]) -> None:
+    """Keys of removed features linger in deployed .env files — they must not
+    kill startup (the production deploy died on exactly this)."""
+    s = make_settings(karma_spotify_refresh_token="stale", some_future_key="x")
+    assert not hasattr(s, "karma_spotify_refresh_token")
+
+
 def test_poll_schedule_parses_valid_times(make_settings: Callable[..., Settings]) -> None:
     s = make_settings(poll_schedule="08:00, 20:30")
     assert s.poll_times() == [(8, 0), (20, 30)]
