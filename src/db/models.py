@@ -62,6 +62,10 @@ class LikedTrack(Base):
     #: Set while a download is in flight — the cross-process single-flight claim
     #: (the bot and the sidecar are separate processes on one database).
     download_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Why the last download attempt failed; cleared on success. Download status
+    #: is derived, not stored: downloaded_at → done, download_started_at →
+    #: running, this field alone → failed (a retry's claim hides the old error).
+    last_download_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

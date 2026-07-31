@@ -7,6 +7,7 @@ objects); only the DB repo calls and the sources themselves are substituted.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -222,3 +223,180 @@ async def test_download_liked_track_refused_when_claim_lost(
 
     with pytest.raises(SourceError, match="already being downloaded"):
         await ctx.download_liked_track(7)
+
+
+# ---- playlist batch download ----------------------------------------------
+
+
+class RefusingSource(MusicSource):
+    """A source whose search always fails — nothing to offer."""
+
+    name = "refusing"
+
+    def __init__(self) -> None:
+        self.search_calls = 0
+
+    async def search(self, query: str, *, limit: int = 20) -> list[SearchResult]:
+        self.search_calls += 1
+        raise SourceError("peer unreachable")
+
+    async def download(self, result: SearchResult, dest_dir: Path) -> Path:
+        raise SourceError("never reached")
+
+
+def _batch_track(track_id: int = 7) -> LikedTrack:
+    return LikedTrack(
+        id=track_id,
+        spotify_track_id=f"t{track_id}",
+        track_name="Akephale",
+        artist_name="ROD",
+        liked_by="karma",
+    )
+
+
+def _batch_ctx(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> tuple[AppContext, AsyncMock]:
+    """Context wired for waterfall tests; returns (ctx, set_download_error mock)."""
+    ctx = AppContext(make_settings(download_dir=str(tmp_path)))
+    ctx.library = MagicMock()
+    monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=_batch_track()))
+    monkeypatch.setattr(ctxmod.repos, "mark_track_downloaded", AsyncMock())
+    set_err = AsyncMock()
+    monkeypatch.setattr(ctxmod.repos, "set_download_error", set_err)
+    _stub_claim(monkeypatch)
+    return ctx, set_err
+
+
+@pytest.mark.asyncio
+async def test_any_source_falls_back_in_preference_order(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Lossless sources go first; a failure there falls through to the next one."""
+    ctx, set_err = _batch_ctx(make_settings, monkeypatch, tmp_path)
+    refusing = RefusingSource()
+    fallback = FakeSource()
+    ctx.sources = {"spotify": fallback, "soulseek": refusing}
+
+    await ctx.download_track_any_source(7)
+
+    assert refusing.search_calls == 1  # soulseek was tried first…
+    assert len(fallback.downloads) == 1  # …spotify caught the fallback
+    set_err.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_any_source_records_error_when_all_fail(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ctx, set_err = _batch_ctx(make_settings, monkeypatch, tmp_path)
+    ctx.sources = {"soulseek": RefusingSource()}
+
+    await ctx.download_track_any_source(7)  # must not raise: the error is recorded
+
+    set_err.assert_awaited_once_with(ANY, 7, "peer unreachable")
+
+
+@pytest.mark.asyncio
+async def test_any_source_skips_already_downloaded_quietly(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A track someone downloaded meanwhile is a no-op, not a recorded failure."""
+    ctx, set_err = _batch_ctx(make_settings, monkeypatch, tmp_path)
+    fake = FakeSource()
+    ctx.sources = {"spotify": fake}
+    done = LikedTrack(
+        id=7, spotify_track_id="t7", liked_by="karma", downloaded_at=datetime(2026, 7, 1)
+    )
+    monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=done))
+
+    await ctx.download_track_any_source(7)
+
+    assert fake.downloads == []
+    set_err.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_playlist_download_runs_every_track_despite_failures(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One broken track must not stop the rest of the batch."""
+    ctx = AppContext(make_settings())
+    tracks = [_batch_track(1), _batch_track(2)]
+    monkeypatch.setattr(ctxmod.repos, "list_playlist_tracks", AsyncMock(return_value=tracks))
+    calls: list[int] = []
+
+    async def record(track_id: int) -> None:
+        calls.append(track_id)
+        if track_id == 1:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(ctx, "download_track_any_source", record)
+
+    queued = await ctx.start_playlist_download(3, "pl_x")
+    await ctx._playlist_tasks[3]  # noqa: SLF001 — wait out the background worker
+
+    assert queued == 2
+    assert calls == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_playlist_download_single_flight_per_playlist(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = AppContext(make_settings())
+    monkeypatch.setattr(
+        ctxmod.repos, "list_playlist_tracks", AsyncMock(return_value=[_batch_track(1)])
+    )
+    gate = asyncio.Event()
+
+    async def blocked(track_id: int) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(ctx, "download_track_any_source", blocked)
+
+    await ctx.start_playlist_download(3, "pl_x")
+    with pytest.raises(SourceError, match="already running"):
+        await ctx.start_playlist_download(3, "pl_x")
+
+    gate.set()
+    await ctx._playlist_tasks[3]  # noqa: SLF001
+    # Finished — the same playlist can be downloaded again.
+    assert await ctx.start_playlist_download(3, "pl_x") == 1
+    await ctx._playlist_tasks[3]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_playlist_download_with_nothing_to_do(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = AppContext(make_settings())
+    monkeypatch.setattr(ctxmod.repos, "list_playlist_tracks", AsyncMock(return_value=[]))
+
+    assert await ctx.start_playlist_download(3, "pl_x") == 0
+    assert 3 not in ctx._playlist_tasks  # noqa: SLF001 — no idle task left behind
+
+
+@pytest.mark.asyncio
+async def test_aclose_cancels_running_playlist_downloads(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = AppContext(make_settings())
+    monkeypatch.setattr(
+        ctxmod.repos, "list_playlist_tracks", AsyncMock(return_value=[_batch_track(1)])
+    )
+    started = asyncio.Event()
+
+    async def hang(track_id: int) -> None:
+        started.set()
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(ctx, "download_track_any_source", hang)
+
+    await ctx.start_playlist_download(3, "pl_x")
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await ctx.aclose()
+
+    assert ctx._playlist_tasks[3].cancelled()  # noqa: SLF001

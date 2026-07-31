@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from src.db import repos
-from src.sources.base import SearchResult, SourceError
+from src.sources.base import DownloadInFlightError, SearchResult, SourceError
 from src.spotify import playlist as spotify_playlist
 from src.spotify.oauth import OAuthError
 
@@ -44,6 +44,8 @@ class TrackOut(BaseModel):
     assigned_playlist_id: str | None
     downloaded_at: datetime | None
     download_path: str | None
+    download_started_at: datetime | None
+    last_download_error: str | None
 
 
 class PlaylistOut(BaseModel):
@@ -54,6 +56,11 @@ class PlaylistOut(BaseModel):
     playlist_id: str
     display_name: str
     emoji: str
+    # Download progress (derived in repos.playlist_download_stats).
+    total_tracks: int = 0
+    downloaded: int = 0
+    downloading: int = 0
+    failed: int = 0
 
 
 class AssignBody(BaseModel):
@@ -249,7 +256,41 @@ def create_app(context: AppContext) -> FastAPI:
     async def list_playlists(ctx: AppContext = Depends(get_context)) -> list[PlaylistOut]:
         async with ctx.session_factory() as session:
             playlists = await repos.get_all_playlists(session)
-        return [PlaylistOut.model_validate(p) for p in playlists]
+            stats = await repos.playlist_download_stats(session)
+        nothing = repos.PlaylistDownloadStats()
+        out = []
+        for p in playlists:
+            s = stats.get(p.playlist_id, nothing)
+            out.append(
+                PlaylistOut(
+                    id=p.id,
+                    genre_key=p.genre_key,
+                    playlist_id=p.playlist_id,
+                    display_name=p.display_name,
+                    emoji=p.emoji,
+                    total_tracks=s.total,
+                    downloaded=s.downloaded,
+                    downloading=s.downloading,
+                    failed=s.failed,
+                )
+            )
+        return out
+
+    @app.post("/playlists/{playlist_db_id}/download", status_code=202)
+    async def download_playlist(
+        playlist_db_id: int,
+        ctx: AppContext = Depends(get_context),
+    ) -> dict[str, int]:
+        """Queue a batch download of the playlist; progress comes via /playlists."""
+        async with ctx.session_factory() as session:
+            playlist = await repos.get_playlist_by_id(session, playlist_db_id)
+        if playlist is None:
+            raise HTTPException(status_code=404, detail="Playlist not found")
+        try:
+            queued = await ctx.start_playlist_download(playlist_db_id, playlist.playlist_id)
+        except DownloadInFlightError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"queued": queued}
 
     @app.post("/likes/fetch")
     async def fetch_likes(ctx: AppContext = Depends(get_context)) -> dict[str, int]:

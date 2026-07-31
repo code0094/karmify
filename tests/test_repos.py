@@ -364,3 +364,78 @@ async def test_mark_downloaded_clears_the_claim(db_session: AsyncSession) -> Non
     await db_session.refresh(track)
     assert track.download_started_at is None
     assert track.downloaded_at is not None
+
+
+# ---- playlist batch download ----------------------------------------------
+
+
+async def test_set_download_error_and_success_clears_it(db_session: AsyncSession) -> None:
+    track = await repos.insert_liked_track(db_session, _track())
+
+    await repos.set_download_error(db_session, track.id, "peer unreachable")
+    await db_session.refresh(track)
+    assert track.last_download_error == "peer unreachable"
+
+    # A later successful download must not leave a stale error behind.
+    await repos.mark_track_downloaded(db_session, track.id, "a.flac")
+    await db_session.refresh(track)
+    assert track.last_download_error is None
+
+
+async def test_list_playlist_tracks_filters(db_session: AsyncSession) -> None:
+    await _add(
+        db_session,
+        _track(spotify_track_id="a", assigned_playlist_id="pl_x"),
+        _track(
+            spotify_track_id="b",
+            assigned_playlist_id="pl_x",
+            downloaded_at=datetime(2026, 7, 1, 12, 0),
+        ),
+        _track(spotify_track_id="c", assigned_playlist_id="pl_y"),
+        _track(spotify_track_id="d"),  # not assigned anywhere
+    )
+
+    everything = await repos.list_playlist_tracks(db_session, "pl_x")
+    assert [t.spotify_track_id for t in everything] == ["a", "b"]
+
+    todo = await repos.list_playlist_tracks(db_session, "pl_x", only_undownloaded=True)
+    assert [t.spotify_track_id for t in todo] == ["a"]
+
+
+async def test_playlist_download_stats_counts_states(db_session: AsyncSession) -> None:
+    now = datetime(2026, 7, 30, 12, 0)
+    await _add(
+        db_session,
+        _track(spotify_track_id="a", assigned_playlist_id="pl_x"),  # pending
+        _track(spotify_track_id="b", assigned_playlist_id="pl_x", downloaded_at=now),
+        # A running retry after an old failure counts as downloading, not failed.
+        _track(
+            spotify_track_id="c",
+            assigned_playlist_id="pl_x",
+            download_started_at=now,
+            last_download_error="old failure",
+        ),
+        _track(spotify_track_id="d", assigned_playlist_id="pl_x", last_download_error="boom"),
+        # Downloaded wins over a stale error left from an earlier attempt.
+        _track(
+            spotify_track_id="e",
+            assigned_playlist_id="pl_y",
+            downloaded_at=now,
+            last_download_error="stale",
+        ),
+        _track(spotify_track_id="f"),  # unassigned tracks belong to no playlist
+    )
+
+    stats = await repos.playlist_download_stats(db_session)
+
+    assert stats["pl_x"] == repos.PlaylistDownloadStats(
+        total=4, downloaded=1, downloading=1, failed=1
+    )
+    assert stats["pl_y"] == repos.PlaylistDownloadStats(
+        total=1, downloaded=1, downloading=0, failed=0
+    )
+    assert set(stats) == {"pl_x", "pl_y"}
+
+
+async def test_playlist_download_stats_empty_db(db_session: AsyncSession) -> None:
+    assert await repos.playlist_download_stats(db_session) == {}

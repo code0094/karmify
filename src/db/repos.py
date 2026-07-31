@@ -1,9 +1,10 @@
 """Repository-pattern database queries."""
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -202,10 +203,89 @@ async def mark_track_downloaded(session: AsyncSession, track_id: int, download_p
             downloaded_at=datetime.now().astimezone(),
             download_path=download_path,
             download_started_at=None,
+            last_download_error=None,  # success wipes the stale failure
         )
     )
     await session.execute(stmt)
     await session.commit()
+
+
+async def set_download_error(session: AsyncSession, track_id: int, error: str) -> None:
+    """Record why the last download attempt failed (the UI shows it as ❌)."""
+    stmt = update(LikedTrack).where(LikedTrack.id == track_id).values(last_download_error=error)
+    await session.execute(stmt)
+    await session.commit()
+
+
+async def list_playlist_tracks(
+    session: AsyncSession, playlist_id: str, *, only_undownloaded: bool = False
+) -> list[LikedTrack]:
+    """Tracks assigned to a Spotify playlist, in insertion order."""
+    stmt = (
+        select(LikedTrack)
+        .where(LikedTrack.assigned_playlist_id == playlist_id)
+        .order_by(LikedTrack.id)
+    )
+    if only_undownloaded:
+        stmt = stmt.where(LikedTrack.downloaded_at.is_(None))
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+@dataclass(frozen=True)
+class PlaylistDownloadStats:
+    """Per-playlist download progress, derived from track state columns."""
+
+    total: int = 0
+    downloaded: int = 0
+    downloading: int = 0
+    failed: int = 0
+
+
+async def playlist_download_stats(session: AsyncSession) -> dict[str, PlaylistDownloadStats]:
+    """Download progress per Spotify playlist id, one grouped query.
+
+    Status is derived, never stored: downloaded_at → done; a live claim
+    (download_started_at) → downloading; an error with no claim → failed, so
+    a running retry automatically hides the previous failure.
+    """
+    downloading = case(
+        (
+            LikedTrack.download_started_at.is_not(None) & LikedTrack.downloaded_at.is_(None),
+            1,
+        ),
+        else_=0,
+    )
+    failed = case(
+        (
+            LikedTrack.last_download_error.is_not(None)
+            & LikedTrack.downloaded_at.is_(None)
+            & LikedTrack.download_started_at.is_(None),
+            1,
+        ),
+        else_=0,
+    )
+    stmt = (
+        select(
+            LikedTrack.assigned_playlist_id,
+            func.count(LikedTrack.id),
+            func.count(LikedTrack.downloaded_at),  # count(col) skips NULLs
+            func.sum(downloading),
+            func.sum(failed),
+        )
+        .where(LikedTrack.assigned_playlist_id.is_not(None))
+        .group_by(LikedTrack.assigned_playlist_id)
+    )
+    result = await session.execute(stmt)
+    return {
+        playlist_id: PlaylistDownloadStats(
+            total=total,
+            downloaded=downloaded,
+            downloading=int(in_flight or 0),
+            failed=int(broken or 0),
+        )
+        for playlist_id, total, downloaded, in_flight, broken in result.all()
+    }
 
 
 async def get_last_liked_at(session: AsyncSession, user_label: str) -> datetime | None:

@@ -21,7 +21,13 @@ from src.db.engine import build_engine
 from src.db.models import LikedTrack
 from src.genre.pipeline import resolve_and_store_genre
 from src.library.manager import LibraryManager
-from src.sources.base import MusicSource, SearchResult, SourceError
+from src.sources.base import (
+    AlreadyDownloadedError,
+    DownloadInFlightError,
+    MusicSource,
+    SearchResult,
+    SourceError,
+)
 from src.sources.spotify_source import SpotifySource
 from src.spotify.client import SpotifyClient
 from src.spotify.downloader import TrackDownloader
@@ -32,6 +38,10 @@ if TYPE_CHECKING:
     from src.config import Settings
 
 logger = structlog.get_logger()
+
+#: Batch downloads try sources in this order: lossless-capable first, the
+#: Spotify 320 kbps ceiling as the last resort. Unconfigured sources are skipped.
+SOURCE_PREFERENCE: tuple[str, ...] = ("soulseek", "bandcamp", "spotify")
 
 
 class AppContext:
@@ -62,6 +72,10 @@ class AppContext:
         # use a database claim instead (see repos.claim_download) because the
         # bot process must see it too.
         self._downloading_refs: set[str] = set()
+        # Background batch downloads, one task per playlist db id. In-process
+        # is enough: all desktop clients talk to the same sidecar, and the
+        # per-track DB claim still guards any overlap with the bot.
+        self._playlist_tasks: dict[int, asyncio.Task[None]] = {}
 
     def _build_sources(self) -> dict[str, MusicSource]:
         """Construct the available music sources based on configuration."""
@@ -133,7 +147,7 @@ class AppContext:
         if track is None:
             raise SourceError(f"Track {track_id} not found")
         if track.downloaded_at:
-            raise SourceError(f"Track {track_id} is already downloaded")
+            raise AlreadyDownloadedError(f"Track {track_id} is already downloaded")
 
         # The claim lives in the database: the bot is a separate process, so an
         # in-memory guard would not see a download it started for this track.
@@ -142,7 +156,7 @@ class AppContext:
                 session, track_id, stale_after_sec=self.settings.download_timeout_sec * 2
             )
         if not claimed:
-            raise SourceError(f"Track {track_id} is already being downloaded")
+            raise DownloadInFlightError(f"Track {track_id} is already being downloaded")
 
         try:
             src = self._require_source(source)
@@ -199,6 +213,68 @@ class AppContext:
         # Sources rank their own results (Soulseek puts lossless first).
         return candidates[0]
 
+    def playlist_download_running(self, playlist_db_id: int) -> bool:
+        """Whether a batch download for this playlist is still in flight."""
+        task = self._playlist_tasks.get(playlist_db_id)
+        return task is not None and not task.done()
+
+    async def start_playlist_download(self, playlist_db_id: int, spotify_playlist_id: str) -> int:
+        """Queue background downloads for every undownloaded track; returns the count.
+
+        Returns immediately — the work continues in a background task, and the
+        client follows progress by re-reading /playlists (fire-and-poll).
+        """
+        if self.playlist_download_running(playlist_db_id):
+            raise DownloadInFlightError(f"Playlist {playlist_db_id} download is already running")
+        async with self.session_factory() as session:
+            tracks = await repos.list_playlist_tracks(
+                session, spotify_playlist_id, only_undownloaded=True
+            )
+        if not tracks:
+            return 0
+        track_ids = [t.id for t in tracks]
+        self._playlist_tasks[playlist_db_id] = asyncio.create_task(
+            self._playlist_worker(playlist_db_id, track_ids)
+        )
+        return len(track_ids)
+
+    async def _playlist_worker(self, playlist_db_id: int, track_ids: list[int]) -> None:
+        """Download a playlist's tracks one by one; failures are per-track."""
+        logger.info("playlist_download.started", playlist=playlist_db_id, tracks=len(track_ids))
+        for track_id in track_ids:
+            try:
+                await self.download_track_any_source(track_id)
+            except asyncio.CancelledError:
+                logger.info("playlist_download.cancelled", playlist=playlist_db_id)
+                raise
+            except Exception:
+                # One broken track must not stop the rest of the batch.
+                logger.exception("playlist_download.track_failed", track=track_id)
+        logger.info("playlist_download.finished", playlist=playlist_db_id)
+
+    async def download_track_any_source(self, track_id: int) -> None:
+        """Try every configured source in preference order; record the failure.
+
+        Never raises for a plain source failure — the batch runs unattended,
+        so the error's place is the track row (shown as ❌ in the UI), not an
+        exception nobody catches.
+        """
+        order = [name for name in SOURCE_PREFERENCE if name in self.sources]
+        last_error = "no download sources are configured"
+        for source in order:
+            try:
+                await self.download_liked_track(track_id, source=source)
+                return
+            except (AlreadyDownloadedError, DownloadInFlightError):
+                return  # someone else already has it — not a failure
+            except SourceError as exc:
+                last_error = str(exc)
+                logger.warning(
+                    "download.source_failed", track=track_id, source=source, error=last_error
+                )
+        async with self.session_factory() as session:
+            await repos.set_download_error(session, track_id, last_error)
+
     async def search_sources(
         self, query: str, *, source: str, limit: int = 20
     ) -> list[SearchResult]:
@@ -224,5 +300,15 @@ class AppContext:
         return self.sources[source]
 
     async def aclose(self) -> None:
-        """Release resources (DB engine) on shutdown."""
+        """Cancel running batch downloads and release the DB engine.
+
+        Cancellation lands inside download_liked_track, whose BaseException
+        handler releases the per-track claim — an interrupted batch leaves no
+        track stuck in "downloading".
+        """
+        running = [t for t in self._playlist_tasks.values() if not t.done()]
+        for task in running:
+            task.cancel()
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
         await self.engine.dispose()

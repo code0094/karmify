@@ -1,5 +1,6 @@
 """Tests for the FastAPI sidecar routes (with a mocked AppContext)."""
 
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock
 
@@ -259,9 +260,22 @@ def test_list_tracks_passes_query_params(monkeypatch: pytest.MonkeyPatch) -> Non
     assert seen == {"genre": "acid", "liked_by": "karma", "only_undownloaded": True, "limit": 5}
 
 
-def test_list_playlists(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_playlists_includes_download_stats(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.db.repos import PlaylistDownloadStats
+
     ctx = _make_ctx()
     monkeypatch.setattr(appmod.repos, "get_all_playlists", AsyncMock(return_value=[_PLAYLIST]))
+    monkeypatch.setattr(
+        appmod.repos,
+        "playlist_download_stats",
+        AsyncMock(
+            return_value={
+                "pl_spotify_id": PlaylistDownloadStats(
+                    total=4, downloaded=2, downloading=1, failed=1
+                )
+            }
+        ),
+    )
 
     with _client(ctx) as c:
         r = c.get("/playlists")
@@ -274,8 +288,80 @@ def test_list_playlists(monkeypatch: pytest.MonkeyPatch) -> None:
             "playlist_id": "pl_spotify_id",
             "display_name": "Acid",
             "emoji": "🧪",
+            "total_tracks": 4,
+            "downloaded": 2,
+            "downloading": 1,
+            "failed": 1,
         }
     ]
+
+
+def test_list_playlists_zero_stats_without_tracks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A playlist with no assigned tracks simply reports zeros."""
+    ctx = _make_ctx()
+    monkeypatch.setattr(appmod.repos, "get_all_playlists", AsyncMock(return_value=[_PLAYLIST]))
+    monkeypatch.setattr(appmod.repos, "playlist_download_stats", AsyncMock(return_value={}))
+
+    with _client(ctx) as c:
+        r = c.get("/playlists")
+
+    assert r.json()[0]["total_tracks"] == 0
+    assert r.json()[0]["downloaded"] == 0
+
+
+def test_download_playlist_starts_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _make_ctx()
+    monkeypatch.setattr(appmod.repos, "get_playlist_by_id", AsyncMock(return_value=_PLAYLIST))
+    ctx.start_playlist_download = AsyncMock(return_value=5)
+
+    with _client(ctx) as c:
+        r = c.post("/playlists/3/download")
+
+    assert r.status_code == 202  # accepted: the work continues in the background
+    assert r.json() == {"queued": 5}
+    # The Spotify playlist id is what the tracks are keyed by — not the DB pk.
+    ctx.start_playlist_download.assert_awaited_once_with(3, "pl_spotify_id")
+
+
+def test_download_playlist_unknown_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _make_ctx()
+    monkeypatch.setattr(appmod.repos, "get_playlist_by_id", AsyncMock(return_value=None))
+
+    with _client(ctx) as c:
+        r = c.post("/playlists/99/download")
+    assert r.status_code == 404
+
+
+def test_download_playlist_already_running_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.sources.base import DownloadInFlightError
+
+    ctx = _make_ctx()
+    monkeypatch.setattr(appmod.repos, "get_playlist_by_id", AsyncMock(return_value=_PLAYLIST))
+    ctx.start_playlist_download = AsyncMock(side_effect=DownloadInFlightError("already running"))
+
+    with _client(ctx) as c:
+        r = c.post("/playlists/3/download")
+    assert r.status_code == 409
+
+
+def test_tracks_expose_download_progress_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The renderer derives ⏳/❌ badges from these two fields."""
+    ctx = _make_ctx()
+    track = LikedTrack(
+        id=1,
+        spotify_track_id="t1",
+        liked_by="karma",
+        download_started_at=datetime(2026, 7, 30, 12, 0),
+        last_download_error="peer unreachable",
+    )
+    monkeypatch.setattr(appmod.repos, "list_tracks", AsyncMock(return_value=[track]))
+
+    with _client(ctx) as c:
+        r = c.get("/tracks")
+
+    data = r.json()[0]
+    assert data["download_started_at"] is not None
+    assert data["last_download_error"] == "peer unreachable"
 
 
 def test_lifespan_closes_context() -> None:

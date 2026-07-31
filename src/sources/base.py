@@ -52,3 +52,11 @@ class MusicSource(ABC):
 
 class SourceError(Exception):
     """Raised when a source operation (search or download) fails."""
+
+
+class AlreadyDownloadedError(SourceError):
+    """The track already has audio on disk — nothing to do."""
+
+
+class DownloadInFlightError(SourceError):
+    """Another process or click is already downloading this track/playlist."""
