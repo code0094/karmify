@@ -6,19 +6,21 @@ import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from src.db import repos
 from src.sources.base import SearchResult, SourceError
 from src.spotify import playlist as spotify_playlist
+from src.spotify.oauth import OAuthError
 
 if TYPE_CHECKING:
     from src.sidecar.context import AppContext
@@ -72,8 +74,29 @@ class DownloadResultBody(BaseModel):
     result: SearchResult
 
 
+def _auth_page(message: str, *, ok: bool) -> HTMLResponse:
+    """Minimal page shown in the browser after the Spotify redirect."""
+    colour = "#1db954" if ok else "#e2564a"
+    body = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<title>Karmify</title>"
+        '<body style="font-family:system-ui;background:#121212;color:#eee;'
+        'display:flex;align-items:center;justify-content:center;height:100vh;margin:0">'
+        f"<p style='font-size:18px;border-left:4px solid {colour};padding-left:16px'>"
+        f"{escape(message)}</p></body>"
+    )
+    return HTMLResponse(body, status_code=200 if ok else 400)
+
+
 def _is_audio_path(path: str) -> bool:
     return path.startswith("/tracks/") and path.endswith("/audio")
+
+
+def _takes_query_token(request: Request) -> bool:
+    """Routes a browser reaches by navigation, where no header can be set."""
+    return request.method == "GET" and (
+        _is_audio_path(request.url.path) or request.url.path == "/auth/spotify/login"
+    )
 
 
 def get_context(request: Request) -> AppContext:
@@ -108,13 +131,18 @@ def create_app(context: AppContext) -> FastAPI:
     async def guard_requests(request: Request, call_next):  # type: ignore[no-untyped-def]
         if request.url.path == "/health":  # liveness probe for the Electron main process
             return await call_next(request)
+        # Spotify itself redirects the browser here; it cannot carry our token,
+        # and the one-time state parameter is what authenticates the callback.
+        if request.url.path == "/auth/spotify/callback":
+            return await call_next(request)
 
         if auth_token:
             supplied = request.headers.get("x-aux-token") or ""
-            # Query-param fallback ONLY for the audio route: <audio src=...>
-            # cannot set headers. Everywhere else the token stays out of URLs
-            # (they end up in access logs). compare_digest is constant-time.
-            if not supplied and request.method == "GET" and _is_audio_path(request.url.path):
+            # Query-param fallback ONLY where a browser navigates directly:
+            # <audio src=...> and the login redirect cannot set headers.
+            # Everywhere else the token stays out of URLs (they end up in
+            # access logs). compare_digest is constant-time.
+            if not supplied and _takes_query_token(request):
                 supplied = request.query_params.get("token") or ""
             # Bytes: str compare_digest requires ASCII, and headers arrive
             # latin-1-decoded — a non-ASCII byte would raise instead of 401.
@@ -153,6 +181,51 @@ def create_app(context: AppContext) -> FastAPI:
     @app.get("/health")
     async def health(ctx: AppContext = Depends(get_context)) -> dict[str, object]:
         return {"status": "ok", "sources": list(ctx.sources)}
+
+    @app.get("/auth/spotify/login")
+    async def spotify_login(
+        user: str,
+        ctx: AppContext = Depends(get_context),
+    ) -> RedirectResponse:
+        """Send the browser to Spotify's consent screen for one account."""
+        if user not in ctx.spotify_clients:
+            raise HTTPException(status_code=404, detail=f"Unknown account: {user}")
+        try:
+            url = ctx.auth_flow.start(user)
+        except OAuthError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return RedirectResponse(url)
+
+    @app.get("/auth/spotify/callback", response_class=HTMLResponse)
+    async def spotify_callback(
+        request: Request,
+        ctx: AppContext = Depends(get_context),
+    ) -> HTMLResponse:
+        """Redeem the code Spotify sent back and store the tokens."""
+        if error := request.query_params.get("error"):
+            return _auth_page(f"Spotify отклонил запрос: {error}", ok=False)
+
+        code = request.query_params.get("code")
+        state = request.query_params.get("state")
+        if not code or not state:
+            return _auth_page("Ответ Spotify без кода авторизации", ok=False)
+
+        try:
+            user_label, token_info = ctx.auth_flow.redeem(code=code, state=state)
+        except OAuthError as exc:
+            return _auth_page(str(exc), ok=False)
+
+        await ctx.store_tokens(user_label, token_info)
+        return _auth_page(f"Аккаунт {user_label} подключён. Окно можно закрыть.", ok=True)
+
+    @app.get("/auth/spotify/status")
+    async def spotify_status(ctx: AppContext = Depends(get_context)) -> dict[str, bool]:
+        """Which accounts already have stored tokens."""
+        async with ctx.session_factory() as session:
+            return {
+                label: (await repos.get_account(session, label)) is not None
+                for label in ctx.spotify_clients
+            }
 
     @app.get("/tracks", response_model=list[TrackOut])
     async def list_tracks(

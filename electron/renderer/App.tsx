@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, audioUrl } from "./api";
+import { api, audioUrl, spotifyLoginUrl } from "./api";
 import { LibraryTable } from "./components/LibraryTable";
 import { Player } from "./components/Player";
 import { SearchBar } from "./components/SearchBar";
@@ -14,6 +14,7 @@ export function App() {
   const [playerSrc, setPlayerSrc] = useState<string | null>(null);
   const [sources, setSources] = useState<string[]>(["spotify"]);
   const [busy, setBusy] = useState(false);
+  const [accounts, setAccounts] = useState<Record<string, boolean>>({});
 
   const reload = useCallback(async () => {
     const [t, p] = await Promise.all([api.listTracks(), api.listPlaylists()]);
@@ -21,13 +22,28 @@ export function App() {
     setPlaylists(p);
   }, []);
 
+  const reloadAccounts = useCallback(async () => {
+    setAccounts(await api.spotifyStatus());
+  }, []);
+
   useEffect(() => {
     reload().catch((e) => console.error(e));
+    reloadAccounts().catch(() => undefined);
     fetch(`${SIDECAR}/health`)
       .then((r) => r.json())
       .then((d: { sources?: string[] }) => setSources(d.sources ?? ["spotify"]))
       .catch(() => undefined);
-  }, [reload]);
+  }, [reload, reloadAccounts]);
+
+  function onConnectSpotify(user: string) {
+    // Consent happens in the real browser: Electron's window is not a place to
+    // type Spotify credentials, and Spotify blocks embedded webviews anyway.
+    window.open(spotifyLoginUrl(user), "_blank", "noopener");
+    // The status only changes once the user finishes in the browser.
+    setTimeout(() => {
+      reloadAccounts().catch(() => undefined);
+    }, 5000);
+  }
 
   async function onFetchLikes() {
     setBusy(true);
@@ -99,6 +115,22 @@ export function App() {
         <button onClick={onFetchLikes} disabled={busy}>
           {busy ? "…" : "🔄 Проверить лайки"}
         </button>
+
+        <span style={{ flex: 1 }} />
+
+        {Object.entries(accounts).map(([user, connected]) => (
+          <button
+            key={user}
+            onClick={() => onConnectSpotify(user)}
+            title={
+              connected
+                ? `${user}: подключён — нажми, чтобы переподключить`
+                : `${user}: не подключён`
+            }
+          >
+            {connected ? "✅" : "🔗"} {user}
+          </button>
+        ))}
       </header>
 
       <SearchBar sources={sources} onResults={setResults} />

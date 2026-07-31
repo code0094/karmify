@@ -21,9 +21,11 @@ class Settings(BaseSettings):
     spotify_client_secret: str
     spotify_redirect_uri: str = "http://localhost:8888/callback"
 
-    # Spotify per-user refresh tokens
-    karma_spotify_refresh_token: str
-    stress303_spotify_refresh_token: str
+    # Per-user refresh tokens. Optional: the supported path is "Log in with
+    # Spotify" in the app, which stores tokens in the database. These are only
+    # a fallback for an account that was authorized before that existed.
+    karma_spotify_refresh_token: str = ""
+    stress303_spotify_refresh_token: str = ""
 
     # Discogs
     discogs_user_token: str

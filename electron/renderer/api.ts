@@ -32,7 +32,16 @@ export function audioUrl(trackId: number): string {
   return `${BASE}/tracks/${trackId}/audio${qs}`;
 }
 
+export function spotifyLoginUrl(user: string): string {
+  // Opened as a top-level navigation, so the token cannot travel in a header.
+  const qs = TOKEN ? `&token=${encodeURIComponent(TOKEN)}` : "";
+  return `${BASE}/auth/spotify/login?user=${encodeURIComponent(user)}${qs}`;
+}
+
 export const api = {
+  spotifyStatus(): Promise<Record<string, boolean>> {
+    return request<Record<string, boolean>>("GET", "/auth/spotify/status");
+  },
   listTracks(filters: TrackFilters = {}): Promise<Track[]> {
     const params = new URLSearchParams();
     if (filters.genre) params.set("genre", filters.genre);

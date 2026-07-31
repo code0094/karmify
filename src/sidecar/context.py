@@ -8,8 +8,9 @@ high-level operations (fetch likes, search, download) that the HTTP routes call.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discogs_client
 import pylast
@@ -24,6 +25,7 @@ from src.sources.base import MusicSource, SearchResult, SourceError
 from src.sources.spotify_source import SpotifySource
 from src.spotify.client import SpotifyClient
 from src.spotify.downloader import TrackDownloader
+from src.spotify.oauth import SpotifyAuthFlow
 from src.spotify.poller import poll_all_users
 
 if TYPE_CHECKING:
@@ -52,6 +54,7 @@ class AppContext:
             api_key=settings.lastfm_api_key, api_secret=settings.lastfm_api_secret
         )
 
+        self.auth_flow = SpotifyAuthFlow(settings)
         self.downloader = TrackDownloader(settings)
         self.library = LibraryManager(settings.library_dir)
         self.sources = self._build_sources()
@@ -105,6 +108,19 @@ class AppContext:
             lastfm=self.lastfm,
             session_factory=self.session_factory,
         )
+
+    async def store_tokens(self, user_label: str, token_info: dict[str, Any]) -> None:
+        """Persist tokens obtained through the browser authorization flow."""
+        expires_at = datetime.now(tz=UTC) + timedelta(seconds=int(token_info["expires_in"]))
+        async with self.session_factory() as session:
+            await repos.save_tokens(
+                session,
+                user_label=user_label,
+                access_token=token_info["access_token"],
+                refresh_token=token_info["refresh_token"],
+                expires_at=expires_at,
+            )
+        logger.info("spotify_auth.tokens_stored", user=user_label)
 
     async def fetch_likes(self) -> int:
         """Poll Spotify for new likes for all users; returns count of new tracks."""

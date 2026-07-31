@@ -13,6 +13,11 @@ from src.db import repos
 
 logger = structlog.get_logger()
 
+
+class NotAuthorizedError(Exception):
+    """Raised when an account has no stored tokens and no fallback token."""
+
+
 SCOPES = "user-library-read playlist-modify-public playlist-modify-private"
 
 
@@ -41,13 +46,19 @@ class SpotifyClient:
         )
 
     def _get_refresh_token(self) -> str:
-        """Get the initial refresh token from settings by user label."""
+        """Fallback refresh token from settings, when the DB has no row yet."""
         if self.user_label == "karma":
-            return self._settings.karma_spotify_refresh_token
+            token = self._settings.karma_spotify_refresh_token
         elif self.user_label == "stress303":
-            return self._settings.stress303_spotify_refresh_token
+            token = self._settings.stress303_spotify_refresh_token
         else:
             raise ValueError(f"Unknown user label: {self.user_label}")
+        if not token:
+            raise NotAuthorizedError(
+                f"Spotify account '{self.user_label}' is not connected — "
+                "use Log in with Spotify in the app"
+            )
+        return token
 
     async def _refresh_and_store(self, refresh_token: str) -> str:
         """Refresh access token via Spotify and store new tokens in DB."""

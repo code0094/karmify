@@ -503,3 +503,89 @@ def test_non_ascii_token_is_rejected_not_crashing() -> None:
     with _client(_token_ctx()) as c:
         r = c.post("/likes/fetch", headers={b"x-aux-token": b"\xff\xfe"})
     assert r.status_code == 401
+
+
+# ---- spotify authorization -------------------------------------------------
+
+
+def _auth_ctx(monkeypatch: pytest.MonkeyPatch, token: str = "") -> MagicMock:
+    ctx = _make_ctx()
+    ctx.settings.sidecar_auth_token = token
+    ctx.spotify_clients = {"karma": MagicMock(), "stress303": MagicMock()}
+    ctx.auth_flow = MagicMock()
+    ctx.auth_flow.start.return_value = "https://accounts.spotify.com/authorize?state=abc"
+    ctx.auth_flow.redeem.return_value = ("karma", {"access_token": "a", "refresh_token": "r"})
+    ctx.store_tokens = AsyncMock()
+    return ctx
+
+
+def test_login_redirects_to_spotify(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _auth_ctx(monkeypatch)
+    with _client(ctx) as c:
+        r = c.get("/auth/spotify/login?user=karma", follow_redirects=False)
+
+    assert r.status_code == 307
+    assert r.headers["location"].startswith("https://accounts.spotify.com/authorize")
+    ctx.auth_flow.start.assert_called_once_with("karma")
+
+
+def test_login_rejects_unknown_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _auth_ctx(monkeypatch)
+    with _client(ctx) as c:
+        r = c.get("/auth/spotify/login?user=stranger", follow_redirects=False)
+    assert r.status_code == 404
+
+
+def test_login_needs_the_token_when_one_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A browser navigates here, so the token rides in the query string."""
+    ctx = _auth_ctx(monkeypatch, token="s3cret")
+    with _client(ctx) as c:
+        assert c.get("/auth/spotify/login?user=karma").status_code == 401
+        ok = c.get("/auth/spotify/login?user=karma&token=s3cret", follow_redirects=False)
+    assert ok.status_code == 307
+
+
+def test_callback_stores_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _auth_ctx(monkeypatch, token="s3cret")  # reachable without the token
+    with _client(ctx) as c:
+        r = c.get("/auth/spotify/callback?code=xyz&state=abc")
+
+    assert r.status_code == 200
+    assert "karma" in r.text
+    ctx.auth_flow.redeem.assert_called_once_with(code="xyz", state="abc")
+    ctx.store_tokens.assert_awaited_once()
+
+
+def test_callback_rejects_bad_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.spotify.oauth import OAuthError
+
+    ctx = _auth_ctx(monkeypatch)
+    ctx.auth_flow.redeem.side_effect = OAuthError("Unknown or expired authorization request")
+
+    with _client(ctx) as c:
+        r = c.get("/auth/spotify/callback?code=xyz&state=forged")
+
+    assert r.status_code == 400
+    ctx.store_tokens.assert_not_awaited()
+
+
+def test_callback_reports_user_denial(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _auth_ctx(monkeypatch)
+    with _client(ctx) as c:
+        r = c.get("/auth/spotify/callback?error=access_denied")
+    assert r.status_code == 400
+    assert "access_denied" in r.text
+    ctx.store_tokens.assert_not_awaited()
+
+
+def test_status_lists_connected_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _auth_ctx(monkeypatch)
+    accounts = {"karma": object(), "stress303": None}
+    monkeypatch.setattr(
+        appmod.repos, "get_account", AsyncMock(side_effect=lambda _s, label: accounts[label])
+    )
+
+    with _client(ctx) as c:
+        r = c.get("/auth/spotify/status")
+
+    assert r.json() == {"karma": True, "stress303": False}
