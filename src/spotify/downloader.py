@@ -112,9 +112,13 @@ class TrackDownloader:
                 proc.communicate(), timeout=s.download_timeout_sec
             )
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await self._abandon(proc, work)
             raise DownloadError(f"таймаут {s.download_timeout_sec}s") from None
+        except asyncio.CancelledError:
+            # Shutdown mid-download: without this the zotify process outlives
+            # us and its scratch directory is left behind.
+            await self._abandon(proc, work)
+            raise
 
         output = (stdout_bytes or b"").decode("utf-8", "replace")
 
@@ -142,6 +146,13 @@ class TrackDownloader:
 
         logger.info("download.done", track=spotify_track_id, path=str(final))
         return final
+
+    @staticmethod
+    async def _abandon(proc: asyncio.subprocess.Process, work: Path) -> None:
+        """Kill a running zotify and drop its scratch directory."""
+        proc.kill()
+        await proc.wait()
+        shutil.rmtree(work, ignore_errors=True)
 
     @staticmethod
     def _find_audio(directory: Path) -> Path | None:

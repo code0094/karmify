@@ -193,3 +193,25 @@ async def test_download_rejects_unsafe_track_id(
 
     with pytest.raises(DownloadError, match="недопустимый id"):
         await d.download("../../etc")
+
+
+@pytest.mark.asyncio
+async def test_cancellation_kills_process_and_cleans_up(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Shutdown mid-download must not orphan zotify or leave .part behind."""
+    proc = FakeProc(delay=30.0)
+    install_fake_exec(monkeypatch, proc)
+    d = TrackDownloader(make_settings(download_dir=str(tmp_path)))
+
+    task = asyncio.create_task(d.download(TRACK_ID))
+    await asyncio.sleep(0.05)  # let it spawn and start waiting
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert proc.killed
+    assert not (tmp_path / ".part" / TRACK_ID).exists()
