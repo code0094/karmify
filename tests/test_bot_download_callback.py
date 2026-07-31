@@ -219,3 +219,31 @@ async def test_second_press_while_downloading_is_refused(
     third = _callback(track.id)
     await handler(third)
     assert "уже скачан" in third.answer.await_args.args[0]
+
+
+async def test_slot_released_when_ack_fails(
+    db_session_factory: Factory,
+    track: LikedTrack,
+    make_settings: Callable[..., Settings],
+    tmp_path: Path,
+) -> None:
+    """The ack is a network call: if it fails the background task never starts,
+    so the slot must not stay claimed forever."""
+    audio = tmp_path / "akephale.mp3"
+    audio.write_bytes(b"x")
+    downloader = MagicMock()
+    downloader.download = AsyncMock(return_value=audio)
+    setup_callback_router(db_session_factory, {}, downloader, _settings(make_settings))
+    handler = _get_handler("handle_download")
+
+    failing = _callback(track.id)
+    failing.answer = AsyncMock(side_effect=RuntimeError("query is too old"))
+    with pytest.raises(RuntimeError):
+        await handler(failing)
+
+    # Retry works: the slot was released, so the download proceeds normally.
+    retry = _callback(track.id)
+    await handler(retry)
+    await _drain_background_tasks()
+
+    retry.message.answer_audio.assert_awaited_once()

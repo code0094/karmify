@@ -235,8 +235,15 @@ def setup_callback_router(
         _downloading.add(track_db_id)
 
         # Downloading takes far longer than Telegram's ~15s callback window, so
-        # ack immediately and run the actual download in a background task.
-        await callback.answer("⏳ Скачиваю, это займёт время…")
+        # ack immediately and run the actual download in a background task. The
+        # ack itself can fail (stale callback query, flood control) — without
+        # this guard the slot would never be released and the track could never
+        # be downloaded again, since only _run_download's finally clears it.
+        try:
+            await callback.answer("⏳ Скачиваю, это займёт время…")
+        except Exception:
+            _downloading.discard(track_db_id)
+            raise
         _spawn(_run_download(callback, track_db_id, track.spotify_track_id))
 
     async def _run_download(
