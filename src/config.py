@@ -21,11 +21,14 @@ class Settings(BaseSettings):
     spotify_client_secret: str
     spotify_redirect_uri: str = "http://localhost:8888/callback"
 
-    # Per-user refresh tokens. Optional: the supported path is "Log in with
-    # Spotify" in the app, which stores tokens in the database. These are only
-    # a fallback for an account that was authorized before that existed.
-    karma_spotify_refresh_token: str = ""
-    stress303_spotify_refresh_token: str = ""
+    # Crew bootstrap: seeded into the database on first start (and only then —
+    # after that the DB is the source of truth and members are added as rows).
+    # Comma-separated user labels; the first one owns the crew, meaning its
+    # Spotify account is where the crew's genre playlists live.
+    default_users: str = Field(
+        default="karma,stress303", description="Initial crew members (comma-separated labels)"
+    )
+    default_crew_name: str = Field(default="AUX MASTERS", description="Name of the initial crew")
 
     # Discogs
     discogs_user_token: str
@@ -99,6 +102,10 @@ class Settings(BaseSettings):
             "on any website can also present."
         ),
     )
+
+    def default_user_labels(self) -> list[str]:
+        """Parse default_users into a list of labels (blank entries dropped)."""
+        return [u.strip() for u in self.default_users.split(",") if u.strip()]
 
     def allowed_origins(self) -> list[str]:
         """Parse sidecar_allowed_origins into a list (blank entries dropped)."""

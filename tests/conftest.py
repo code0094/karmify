@@ -18,8 +18,6 @@ from src.db.models import Base, GenrePlaylist, LikedTrack
 _REQUIRED_SETTINGS: dict[str, Any] = {
     "spotify_client_id": "cid",
     "spotify_client_secret": "secret",
-    "karma_spotify_refresh_token": "rt-karma",
-    "stress303_spotify_refresh_token": "rt-stress",
     "discogs_user_token": "discogs-token",
     "lastfm_api_key": "lastfm-key",
     "lastfm_api_secret": "lastfm-secret",

@@ -379,6 +379,38 @@ async def test_playlist_download_with_nothing_to_do(
     assert 3 not in ctx._playlist_tasks  # noqa: SLF001 — no idle task left behind
 
 
+# ---- bootstrap: clients from the users table --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_builds_clients_from_users_table(
+    make_settings: Callable[..., Settings],
+    db_session_factory: object,
+) -> None:
+    """Clients cover every user row — including ones added after first seed."""
+    ctx = AppContext(make_settings())
+    ctx.session_factory = db_session_factory  # type: ignore[assignment]
+    async with ctx.session_factory() as session:  # type: ignore[operator]
+        await ctxmod.repos.ensure_user(session, label="egor", display_name="Егор")
+
+    await ctx.bootstrap()
+
+    assert set(ctx.spotify_clients) == {"karma", "stress303", "egor"}
+    assert ctx.owner_label == "karma"
+    assert ctx.default_crew_id is not None
+    assert ctx.owner_client() is ctx.spotify_clients["karma"]
+
+
+def test_owner_client_before_bootstrap_refuses(
+    make_settings: Callable[..., Settings],
+) -> None:
+    from src.spotify.client import NotAuthorizedError
+
+    ctx = AppContext(make_settings())
+    with pytest.raises(NotAuthorizedError):
+        ctx.owner_client()
+
+
 # ---- default playlists init ------------------------------------------------
 
 
@@ -394,6 +426,8 @@ async def test_init_default_playlists_creates_missing_and_seeds_aliases(
     client = MagicMock()
     client.get_client = AsyncMock(return_value=sp)
     ctx.spotify_clients = {"karma": client}
+    ctx.owner_label = "karma"
+    ctx.default_crew_id = 7
     create = AsyncMock(side_effect=lambda _sp, name: f"pl_{name.lower()}")
     monkeypatch.setattr(ctxmod.spotify_playlist, "create_playlist", create)
 
@@ -404,6 +438,7 @@ async def test_init_default_playlists_creates_missing_and_seeds_aliases(
     async with ctx.session_factory() as session:  # type: ignore[operator]
         playlists = await ctxmod.repos.get_all_playlists(session)
         assert {p.genre_key for p in playlists} == {k for k, _, _ in ctxmod.DEFAULT_PLAYLISTS}
+        assert {p.crew_id for p in playlists} == {7}  # crew playlists, not orphans
         # The mapper must resolve a documented alias right after init.
         assert await ctxmod.repos.find_genre_key(session, "dark techno") == "hardgroove"
 
@@ -420,6 +455,7 @@ async def test_init_default_playlists_is_idempotent(
     client = MagicMock()
     client.get_client = AsyncMock(return_value=object())
     ctx.spotify_clients = {"karma": client}
+    ctx.owner_label = "karma"
     create = AsyncMock(side_effect=lambda _sp, name: f"pl_{name.lower()}")
     monkeypatch.setattr(ctxmod.spotify_playlist, "create_playlist", create)
 
@@ -445,6 +481,7 @@ async def test_init_default_playlists_requires_auth_only_when_creating(
     client = MagicMock()
     client.get_client = AsyncMock(side_effect=NotAuthorizedError("karma is not connected"))
     ctx.spotify_clients = {"karma": client}
+    ctx.owner_label = "karma"
 
     with pytest.raises(NotAuthorizedError):
         await ctx.init_default_playlists()

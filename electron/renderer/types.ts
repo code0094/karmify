@@ -37,6 +37,18 @@ export interface SearchResult {
   extra?: Record<string, unknown>;
 }
 
+export interface CrewMember {
+  label: string;
+  display_name: string;
+  spotify_connected: boolean;
+  owner: boolean;
+}
+
+export interface Crew {
+  name: string | null;
+  members: CrewMember[];
+}
+
 export interface TrackFilters {
   genre?: string;
   liked_by?: string;

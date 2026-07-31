@@ -17,6 +17,7 @@ import pylast
 import structlog
 
 from src.db import repos
+from src.db.bootstrap import ensure_default_crew
 from src.db.engine import build_engine
 from src.db.models import LikedTrack
 from src.genre.defaults import DEFAULT_ALIASES, DEFAULT_PLAYLISTS
@@ -31,7 +32,7 @@ from src.sources.base import (
 )
 from src.sources.spotify_source import SpotifySource
 from src.spotify import playlist as spotify_playlist
-from src.spotify.client import SpotifyClient
+from src.spotify.client import NotAuthorizedError, SpotifyClient
 from src.spotify.downloader import TrackDownloader
 from src.spotify.oauth import SpotifyAuthFlow
 from src.spotify.poller import poll_all_users
@@ -53,11 +54,12 @@ class AppContext:
         self.settings = settings
         self.engine, self.session_factory = build_engine(settings)
 
-        self.spotify_clients: dict[str, SpotifyClient] = {
-            "karma": SpotifyClient("karma", settings, self.session_factory),
-            "stress303": SpotifyClient("stress303", settings, self.session_factory),
-        }
-        self.all_clients = list(self.spotify_clients.values())
+        # Populated by bootstrap() from the users table — the DB decides who
+        # uses this instance, not the code.
+        self.spotify_clients: dict[str, SpotifyClient] = {}
+        self.all_clients: list[SpotifyClient] = []
+        self.owner_label: str | None = None
+        self.default_crew_id: int | None = None
 
         self.discogs = discogs_client.Client(
             "AuxDJBot/0.1", user_token=settings.discogs_user_token
@@ -84,7 +86,7 @@ class AppContext:
         sources: dict[str, MusicSource] = {
             "spotify": SpotifySource(
                 self.downloader,
-                get_sp=lambda: self.spotify_clients["karma"].get_client(),
+                get_sp=lambda: self.owner_client().get_client(),
             )
         }
 
@@ -113,6 +115,32 @@ class AppContext:
             )
 
         return sources
+
+    async def bootstrap(self) -> None:
+        """Seed the default crew and build Spotify clients from the users table.
+
+        Runs once at startup (idempotent). After the first run the settings
+        labels are just history — the users table decides who gets a client.
+        """
+        crew, users = await ensure_default_crew(self.session_factory, self.settings)
+        if crew is not None:
+            async with self.session_factory() as session:
+                owner = await repos.get_user_by_id(session, crew.owner_user_id)
+            self.owner_label = owner.label if owner else None
+            self.default_crew_id = crew.id
+        self.spotify_clients = {
+            u.label: SpotifyClient(u.label, self.settings, self.session_factory) for u in users
+        }
+        self.all_clients = list(self.spotify_clients.values())
+        logger.info(
+            "context.bootstrapped", users=list(self.spotify_clients), owner=self.owner_label
+        )
+
+    def owner_client(self) -> SpotifyClient:
+        """The crew owner's Spotify — the account hosting the crew's playlists."""
+        if self.owner_label is None or self.owner_label not in self.spotify_clients:
+            raise NotAuthorizedError("Crew has no owner account yet — bootstrap has not run")
+        return self.spotify_clients[self.owner_label]
 
     async def _on_new_track(self, track: LikedTrack) -> None:
         """Resolve genre for a newly detected like and persist it (no Telegram)."""
@@ -230,7 +258,7 @@ class AppContext:
                     skipped += 1
                     continue
                 if sp is None:
-                    sp = await self.spotify_clients["karma"].get_client()
+                    sp = await self.owner_client().get_client()
                 playlist_id = await spotify_playlist.create_playlist(sp, display_name)
                 await repos.add_genre_playlist(
                     session,
@@ -238,6 +266,7 @@ class AppContext:
                     playlist_id=playlist_id,
                     display_name=display_name,
                     emoji=emoji,
+                    crew_id=self.default_crew_id,
                 )
                 created += 1
             for genre_key, aliases in DEFAULT_ALIASES.items():

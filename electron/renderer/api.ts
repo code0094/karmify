@@ -1,4 +1,4 @@
-import type { Playlist, SearchResult, Track, TrackFilters } from "./types";
+import type { Crew, Playlist, SearchResult, Track, TrackFilters } from "./types";
 
 export interface PreviewHit {
   previewUrl: string;
@@ -49,8 +49,8 @@ export function spotifyLoginUrl(user: string): string {
 }
 
 export const api = {
-  spotifyStatus(): Promise<Record<string, boolean>> {
-    return request<Record<string, boolean>>("GET", "/auth/spotify/status");
+  crew(): Promise<Crew> {
+    return request<Crew>("GET", "/crew");
   },
   listTracks(filters: TrackFilters = {}): Promise<Track[]> {
     const params = new URLSearchParams();

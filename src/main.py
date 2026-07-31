@@ -19,6 +19,7 @@ from src.bot.app import create_bot, create_dispatcher
 from src.bot.notifications import send_new_like_notification
 from src.config import get_settings
 from src.db import repos
+from src.db.bootstrap import ensure_default_crew
 from src.db.engine import build_engine
 from src.db.models import LikedTrack
 from src.genre.pipeline import resolve_and_store_genre
@@ -44,11 +45,10 @@ async def main() -> None:
     # Database
     engine, session_factory = build_engine(settings)
 
-    # Spotify clients
-    karma_client = SpotifyClient("karma", settings, session_factory)
-    stress303_client = SpotifyClient("stress303", settings, session_factory)
-    spotify_clients = {"karma": karma_client, "stress303": stress303_client}
-    all_clients = [karma_client, stress303_client]
+    # Spotify clients — one per user row (the crew is seeded on first start).
+    _crew, users = await ensure_default_crew(session_factory, settings)
+    spotify_clients = {u.label: SpotifyClient(u.label, settings, session_factory) for u in users}
+    all_clients = list(spotify_clients.values())
 
     # External APIs
     discogs = discogs_client.Client("AuxDJBot/0.1", user_token=settings.discogs_user_token)

@@ -36,7 +36,6 @@ class SpotifyClient:
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         self.user_label = user_label
-        self._settings = settings
         self._session_factory = session_factory
         self._oauth = SpotifyOAuth(
             client_id=settings.spotify_client_id,
@@ -44,21 +43,6 @@ class SpotifyClient:
             redirect_uri=settings.spotify_redirect_uri,
             scope=SCOPES,
         )
-
-    def _get_refresh_token(self) -> str:
-        """Fallback refresh token from settings, when the DB has no row yet."""
-        if self.user_label == "karma":
-            token = self._settings.karma_spotify_refresh_token
-        elif self.user_label == "stress303":
-            token = self._settings.stress303_spotify_refresh_token
-        else:
-            raise ValueError(f"Unknown user label: {self.user_label}")
-        if not token:
-            raise NotAuthorizedError(
-                f"Spotify account '{self.user_label}' is not connected — "
-                "use Log in with Spotify in the app"
-            )
-        return token
 
     async def _refresh_and_store(self, refresh_token: str) -> str:
         """Refresh access token via Spotify and store new tokens in DB."""
@@ -80,14 +64,22 @@ class SpotifyClient:
         return access_token
 
     async def get_client(self) -> spotipy.Spotify:
-        """Return a ready-to-use Spotify client, refreshing token if needed."""
+        """Return a ready-to-use Spotify client, refreshing token if needed.
+
+        The database is the only token store — no row means the user never
+        completed "Log in with Spotify" in the app.
+        """
         async with self._session_factory() as session:
             account = await repos.get_account(session, self.user_label)
 
-        if account and _as_aware(account.token_expires_at) > datetime.now(tz=UTC):
+        if account is None:
+            raise NotAuthorizedError(
+                f"Spotify account '{self.user_label}' is not connected — "
+                "use Log in with Spotify in the app"
+            )
+        if _as_aware(account.token_expires_at) > datetime.now(tz=UTC):
             access_token = account.access_token
         else:
-            refresh_token = account.refresh_token if account else self._get_refresh_token()
-            access_token = await self._refresh_and_store(refresh_token)
+            access_token = await self._refresh_and_store(account.refresh_token)
 
         return spotipy.Spotify(auth=access_token)

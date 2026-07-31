@@ -8,7 +8,15 @@ from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import GenreAlias, GenrePlaylist, LikedTrack, SpotifyAccount
+from src.db.models import (
+    Crew,
+    CrewMember,
+    GenreAlias,
+    GenrePlaylist,
+    LikedTrack,
+    SpotifyAccount,
+    User,
+)
 
 
 async def get_account(session: AsyncSession, user_label: str) -> SpotifyAccount | None:
@@ -137,15 +145,98 @@ async def add_genre_playlist(
     playlist_id: str,
     display_name: str,
     emoji: str,
+    crew_id: int | None = None,
 ) -> GenrePlaylist:
     """Register a genre playlist (created on Spotify beforehand)."""
     row = GenrePlaylist(
-        genre_key=genre_key, playlist_id=playlist_id, display_name=display_name, emoji=emoji
+        genre_key=genre_key,
+        playlist_id=playlist_id,
+        display_name=display_name,
+        emoji=emoji,
+        crew_id=crew_id,
     )
     session.add(row)
     await session.commit()
     await session.refresh(row)
     return row
+
+
+# ---- users and crews -------------------------------------------------------
+
+
+async def ensure_user(
+    session: AsyncSession, *, label: str, display_name: str | None = None
+) -> User:
+    """Get-or-create a user by label; an existing row is never rewritten."""
+    stmt = select(User).where(User.label == label)
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    row = User(label=label, display_name=display_name or label)
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def list_users(session: AsyncSession) -> list[User]:
+    """All users, oldest first."""
+    result = await session.execute(select(User).order_by(User.id))
+    return list(result.scalars().all())
+
+
+async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
+    """Get user by primary key."""
+    return await session.get(User, user_id)
+
+
+async def ensure_crew(session: AsyncSession, *, name: str, owner_user_id: int) -> Crew:
+    """Get-or-create a crew by name; the original owner is kept."""
+    stmt = select(Crew).where(Crew.name == name)
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    row = Crew(name=name, owner_user_id=owner_user_id)
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def get_crew(session: AsyncSession) -> Crew | None:
+    """The crew — Karmify is a single-crew world until the SaaS phase."""
+    result = await session.execute(select(Crew).order_by(Crew.id).limit(1))
+    return result.scalar_one_or_none()
+
+
+async def ensure_crew_member(session: AsyncSession, *, crew_id: int, user_id: int) -> bool:
+    """Add a user to a crew unless already in it; True when added."""
+    stmt = select(CrewMember).where(CrewMember.crew_id == crew_id, CrewMember.user_id == user_id)
+    if (await session.execute(stmt)).scalar_one_or_none() is not None:
+        return False
+    session.add(CrewMember(crew_id=crew_id, user_id=user_id))
+    await session.commit()
+    return True
+
+
+async def get_crew_members(session: AsyncSession, crew_id: int) -> list[User]:
+    """Users in a crew, in joining order."""
+    stmt = (
+        select(User)
+        .join(CrewMember, CrewMember.user_id == User.id)
+        .where(CrewMember.crew_id == crew_id)
+        .order_by(CrewMember.id)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def adopt_orphan_playlists(session: AsyncSession, crew_id: int) -> int:
+    """Attach playlists created before crews existed; returns how many."""
+    stmt = update(GenrePlaylist).where(GenrePlaylist.crew_id.is_(None)).values(crew_id=crew_id)
+    result = await session.execute(stmt)
+    await session.commit()
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
 async def add_genre_alias(session: AsyncSession, *, alias: str, genre_key: str) -> bool:

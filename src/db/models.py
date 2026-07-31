@@ -10,6 +10,50 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    """A DJ using Karmify.
+
+    ``label`` is the stable slug the rest of the schema keys on by convention
+    (liked_tracks.liked_by, spotify_accounts.user_label) — the schema has no
+    FK constraints anywhere, joins are by convention.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    label: Mapped[str] = mapped_column(String(50), unique=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Crew(Base):
+    """A group of DJs sharing genre playlists (e.g. AUX MASTERS)."""
+
+    __tablename__ = "crews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    #: Whose Spotify account hosts the crew's playlists.
+    owner_user_id: Mapped[int] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class CrewMember(Base):
+    """Membership: which users are in which crew."""
+
+    __tablename__ = "crew_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    crew_id: Mapped[int] = mapped_column()
+    user_id: Mapped[int] = mapped_column()
+
+    __table_args__ = (UniqueConstraint("crew_id", "user_id"),)
+
+
 class SpotifyAccount(Base):
     """Spotify OAuth tokens for each DJ account."""
 
@@ -38,6 +82,8 @@ class GenrePlaylist(Base):
     playlist_id: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(100))
     emoji: Mapped[str] = mapped_column(String(10), default="🎵")
+    #: Which crew shares this playlist; NULL only before the first bootstrap.
+    crew_id: Mapped[int | None] = mapped_column()
 
 
 class LikedTrack(Base):

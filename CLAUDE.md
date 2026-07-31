@@ -204,14 +204,16 @@ CREATE TABLE genre_aliases (
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=         # shared chat ID
 
-# Spotify — Account 1 (karma)
+# Spotify (общие креды Developer App; токены пользователей живут в БД —
+# каждый участник подключается через «Log in with Spotify» в приложении)
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
 SPOTIFY_REDIRECT_URI=http://localhost:8888/callback
-KARMA_SPOTIFY_REFRESH_TOKEN=
 
-# Spotify — Account 2 (stress303)
-STRESS303_SPOTIFY_REFRESH_TOKEN=
+# Команда: сеется в БД при первом старте, дальше БД — источник правды.
+# Первый лейбл — владелец (его Spotify хостит жанровые плейлисты).
+DEFAULT_USERS=karma,stress303
+DEFAULT_CREW_NAME=AUX MASTERS
 
 # Discogs
 DISCOGS_USER_TOKEN=
@@ -371,8 +373,8 @@ Backend ядро развёрнуто (Postgres + venv + sidecar systemd `karmif
 `systemctl restart karmify-sidecar`.
 
 Собрать и вписать:
-- [ ] `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` (Spotify Developer app)
-- [ ] `KARMA_SPOTIFY_REFRESH_TOKEN` / `STRESS303_SPOTIFY_REFRESH_TOKEN` (OAuth per account)
+- [x] `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` (Spotify Developer app)
+- [x] Spotify-токены пользователей — через «Log in with Spotify» в приложении (живут в БД)
 - [ ] `DISCOGS_USER_TOKEN`
 - [ ] `LASTFM_API_KEY` / `LASTFM_API_SECRET`
 - [ ] `ZOTIFY_CREDENTIALS_PATH` — credentials.json от BURNER Spotify-аккаунта (для скачивания)

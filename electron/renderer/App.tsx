@@ -5,7 +5,7 @@ import { ToastStack, type ToastKind, type ToastMsg } from "./components/Toast";
 import { InboxView } from "./views/InboxView";
 import { LibraryView } from "./views/LibraryView";
 import { SearchView } from "./views/SearchView";
-import type { Playlist, Track } from "./types";
+import type { Crew, Playlist, Track } from "./types";
 
 const SIDECAR = window.aux?.sidecarUrl ?? "http://127.0.0.1:8765";
 
@@ -15,7 +15,7 @@ export function App() {
   const [view, setView] = useState<View>("inbox");
   const [tracks, setTracks] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [accounts, setAccounts] = useState<Record<string, boolean>>({});
+  const [crew, setCrew] = useState<Crew | null>(null);
   const [sources, setSources] = useState<string[]>([]);
   const [busyLikes, setBusyLikes] = useState(false);
   const [playing, setPlaying] = useState<NowPlaying | null>(null);
@@ -44,8 +44,8 @@ export function App() {
   const loadEverything = useCallback(async () => {
     await reload();
     api
-      .spotifyStatus()
-      .then(setAccounts)
+      .crew()
+      .then(setCrew)
       .catch(() => undefined);
     fetch(`${SIDECAR}/health`)
       .then((r) => r.json())
@@ -146,8 +146,8 @@ export function App() {
     // The status only changes once the user finishes in the browser.
     setTimeout(() => {
       api
-        .spotifyStatus()
-        .then(setAccounts)
+        .crew()
+        .then(setCrew)
         .catch(() => undefined);
     }, 5000);
   }
@@ -164,22 +164,26 @@ export function App() {
     <div className="app">
       <header className="header">
         <span className="logo">KARMIFY</span>
+        {crew?.name && <span className="dim">{crew.name}</span>}
         <button className="btn" onClick={onFetchLikes} disabled={busyLikes}>
           {busyLikes ? "Проверяю…" : "🔄 Проверить лайки"}
         </button>
         <span className="spacer" />
-        {Object.entries(accounts).map(([user, connected]) => (
+        {(crew?.members ?? []).map((m) => (
           <button
-            key={user}
-            className={connected ? "chip chip-ok" : "chip"}
-            onClick={() => onConnectSpotify(user)}
+            key={m.label}
+            className={m.spotify_connected ? "chip chip-ok" : "chip"}
+            onClick={() => onConnectSpotify(m.label)}
             title={
-              connected
-                ? `Spotify ${user} подключён — нажми, чтобы переподключить`
-                : `Spotify ${user} не подключён — нажми, чтобы авторизоваться`
+              (m.owner ? "Владелец команды — плейлисты живут на этом Spotify. " : "") +
+              (m.spotify_connected
+                ? `Spotify ${m.label} подключён — нажми, чтобы переподключить`
+                : `Spotify ${m.label} не подключён — нажми, чтобы авторизоваться`)
             }
           >
-            <span className={connected ? "dot dot-ok" : "dot"} /> {user}
+            <span className={m.spotify_connected ? "dot dot-ok" : "dot"} />
+            {m.owner ? "★ " : ""}
+            {m.display_name}
           </button>
         ))}
       </header>
@@ -214,7 +218,7 @@ export function App() {
           <LibraryView
             playlists={playlists}
             tracks={assigned}
-            spotifyConnected={Object.values(accounts).some(Boolean)}
+            spotifyConnected={(crew?.members ?? []).some((m) => m.spotify_connected)}
             onPlay={onPlay}
             onAssign={onAssign}
             onDownloadPlaylist={onDownloadPlaylist}

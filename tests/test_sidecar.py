@@ -25,6 +25,7 @@ def _make_ctx() -> MagicMock:
     ctx.session_factory = factory
 
     ctx.fetch_likes = AsyncMock(return_value=3)
+    ctx.bootstrap = AsyncMock()
     ctx.settings.allowed_origins.return_value = ["http://localhost:5173"]
     ctx.settings.sidecar_auth_token = ""  # origin-filter mode unless a test opts in
     ctx.settings.allowed_hosts.return_value = ["127.0.0.1", "karmify.example"]
@@ -418,6 +419,58 @@ def test_lifespan_closes_context() -> None:
     with _client(ctx):
         pass
     ctx.aclose.assert_awaited_once()
+
+
+def test_lifespan_bootstraps_the_crew() -> None:
+    """Users/crew seeding happens on startup — before any request arrives."""
+    ctx = _make_ctx()
+    with _client(ctx):
+        ctx.bootstrap.assert_awaited_once()
+
+
+# ---- crew overview ---------------------------------------------------------
+
+
+def test_crew_lists_members_with_connection_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.db.models import Crew, User
+
+    ctx = _make_ctx()
+    crew = Crew(id=1, name="AUX MASTERS", owner_user_id=10)
+    roma = User(id=10, label="karma", display_name="karma")
+    egor = User(id=11, label="stress303", display_name="Егор")
+    monkeypatch.setattr(appmod.repos, "get_crew", AsyncMock(return_value=crew))
+    monkeypatch.setattr(appmod.repos, "get_crew_members", AsyncMock(return_value=[roma, egor]))
+    accounts = {"karma": object(), "stress303": None}
+    monkeypatch.setattr(
+        appmod.repos, "get_account", AsyncMock(side_effect=lambda _s, label: accounts[label])
+    )
+
+    with _client(ctx) as c:
+        r = c.get("/crew")
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "name": "AUX MASTERS",
+        "members": [
+            {"label": "karma", "display_name": "karma", "spotify_connected": True, "owner": True},
+            {
+                "label": "stress303",
+                "display_name": "Егор",
+                "spotify_connected": False,
+                "owner": False,
+            },
+        ],
+    }
+
+
+def test_crew_before_bootstrap_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _make_ctx()
+    monkeypatch.setattr(appmod.repos, "get_crew", AsyncMock(return_value=None))
+
+    with _client(ctx) as c:
+        r = c.get("/crew")
+
+    assert r.json() == {"name": None, "members": []}
 
 
 # ---- origin guard ---------------------------------------------------------

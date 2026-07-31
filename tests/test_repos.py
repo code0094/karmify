@@ -466,3 +466,51 @@ async def test_add_genre_alias_is_idempotent_and_normalized(db_session: AsyncSes
 
     # The mapper lowercases its input — the stored alias must match it.
     assert await repos.find_genre_key(db_session, "DARK TECHNO") == "hardgroove"
+
+
+# ---- users and crews -------------------------------------------------------
+
+
+async def test_ensure_user_creates_once(db_session: AsyncSession) -> None:
+    first = await repos.ensure_user(db_session, label="karma")
+    again = await repos.ensure_user(db_session, label="karma", display_name="Рома")
+
+    assert first.id == again.id
+    assert again.display_name == "karma"  # get-or-create never rewrites an existing row
+    assert first.display_name == "karma"  # display_name defaults to the label
+
+    users = await repos.list_users(db_session)
+    assert [u.label for u in users] == ["karma"]
+
+
+async def test_ensure_crew_with_members_and_orphan_playlists(db_session: AsyncSession) -> None:
+    owner = await repos.ensure_user(db_session, label="karma")
+    friend = await repos.ensure_user(db_session, label="stress303")
+
+    crew = await repos.ensure_crew(db_session, name="AUX MASTERS", owner_user_id=owner.id)
+    same = await repos.ensure_crew(db_session, name="AUX MASTERS", owner_user_id=friend.id)
+    assert same.id == crew.id
+    assert same.owner_user_id == owner.id  # get-or-create keeps the original owner
+
+    assert await repos.ensure_crew_member(db_session, crew_id=crew.id, user_id=owner.id)
+    assert await repos.ensure_crew_member(db_session, crew_id=crew.id, user_id=friend.id)
+    assert not await repos.ensure_crew_member(db_session, crew_id=crew.id, user_id=friend.id)
+
+    members = await repos.get_crew_members(db_session, crew.id)
+    assert [m.label for m in members] == ["karma", "stress303"]
+    assert (await repos.get_user_by_id(db_session, owner.id)).label == "karma"  # type: ignore[union-attr]
+
+    # Playlists created before crews existed get adopted; assigned ones stay put.
+    await repos.add_genre_playlist(
+        db_session, genre_key="acid", playlist_id="pl_a", display_name="Acid", emoji="🧪"
+    )
+    adopted = await repos.adopt_orphan_playlists(db_session, crew.id)
+    assert adopted == 1
+    assert await repos.adopt_orphan_playlists(db_session, crew.id) == 0
+
+    found = await repos.get_playlist_by_genre_key(db_session, "acid")
+    assert found is not None and found.crew_id == crew.id
+
+
+async def test_get_crew_empty_db(db_session: AsyncSession) -> None:
+    assert await repos.get_crew(db_session) is None

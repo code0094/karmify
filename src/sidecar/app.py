@@ -65,6 +65,18 @@ class PlaylistOut(BaseModel):
     failed: int = 0
 
 
+class CrewMemberOut(BaseModel):
+    label: str
+    display_name: str
+    spotify_connected: bool
+    owner: bool
+
+
+class CrewOut(BaseModel):
+    name: str | None
+    members: list[CrewMemberOut]
+
+
 class AssignBody(BaseModel):
     playlist_db_id: int
 
@@ -120,6 +132,7 @@ def create_app(context: AppContext) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.context = context
+        await context.bootstrap()  # seed the crew, build clients from the users table
         logger.info("sidecar.started", sources=list(context.sources))
         try:
             yield
@@ -236,6 +249,25 @@ def create_app(context: AppContext) -> FastAPI:
 
         await ctx.store_tokens(user_label, token_info)
         return _auth_page(f"Аккаунт {user_label} подключён. Окно можно закрыть.", ok=True)
+
+    @app.get("/crew", response_model=CrewOut)
+    async def crew_overview(ctx: AppContext = Depends(get_context)) -> CrewOut:
+        """The crew and its members, with per-member Spotify connection state."""
+        async with ctx.session_factory() as session:
+            crew = await repos.get_crew(session)
+            if crew is None:
+                return CrewOut(name=None, members=[])
+            members = await repos.get_crew_members(session, crew.id)
+            out = [
+                CrewMemberOut(
+                    label=user.label,
+                    display_name=user.display_name,
+                    spotify_connected=(await repos.get_account(session, user.label)) is not None,
+                    owner=user.id == crew.owner_user_id,
+                )
+                for user in members
+            ]
+        return CrewOut(name=crew.name, members=out)
 
     @app.get("/auth/spotify/status")
     async def spotify_status(ctx: AppContext = Depends(get_context)) -> dict[str, bool]:

@@ -91,17 +91,18 @@ async def test_expired_db_token_triggers_refresh(
 
 
 @pytest.mark.asyncio
-async def test_no_account_falls_back_to_settings_token(
+async def test_rotated_refresh_token_is_persisted(
     client: SpotifyClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(clientmod.repos, "get_account", AsyncMock(return_value=None))
+    """Spotify may ROTATE the refresh token — losing it would kill the account:
+    the rotated value, not the input one, must be persisted."""
+    monkeypatch.setattr(
+        clientmod.repos, "get_account", AsyncMock(return_value=_account(expires_in_hours=-1))
+    )
     update = AsyncMock()
     monkeypatch.setattr(clientmod.repos, "save_tokens", update)
 
-    seen: dict[str, Any] = {}
-
     def fake_refresh(refresh_token: str) -> dict[str, Any]:
-        seen["refresh_token"] = refresh_token
         return {"access_token": "first", "expires_in": 3600, "refresh_token": "rotated"}
 
     monkeypatch.setattr(client._oauth, "refresh_access_token", fake_refresh)
@@ -109,31 +110,41 @@ async def test_no_account_falls_back_to_settings_token(
     sp = await client.get_client()
 
     assert sp.auth == "first"  # type: ignore[attr-defined]
-    assert seen["refresh_token"] == "rt-karma"  # from Settings (conftest)
-    # Spotify ROTATED the refresh token — losing it would kill the account:
-    # the rotated value, not the input one, must be persisted.
     update.assert_awaited_once()
     assert update.await_args.kwargs["refresh_token"] == "rotated"
 
 
-def test_unknown_user_label_raises(
-    make_settings: Callable[..., Settings], mock_session_factory: MagicMock
+@pytest.mark.asyncio
+async def test_no_account_row_means_not_connected(
+    client: SpotifyClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    c = SpotifyClient("nobody", make_settings(), mock_session_factory)
-    with pytest.raises(ValueError, match="nobody"):
-        c._get_refresh_token()
+    """No DB row → the user simply never pressed "Log in with Spotify"."""
+    from src.spotify.client import NotAuthorizedError
+
+    monkeypatch.setattr(clientmod.repos, "get_account", AsyncMock(return_value=None))
+
+    with pytest.raises(NotAuthorizedError, match="not connected"):
+        await client.get_client()
 
 
 @pytest.mark.asyncio
-async def test_first_refresh_creates_the_account_row(
+async def test_expired_token_on_real_db_refreshes_once(
     make_settings: Callable[..., Settings],
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End to end on a real (empty) database: the whole point of the class is
-    that the next call reuses a stored token instead of refreshing again."""
+    """End to end on a real database: the whole point of the class is that the
+    next call reuses the stored token instead of refreshing again."""
     monkeypatch.setattr(clientmod.spotipy, "Spotify", FakeSpotify)
     client = SpotifyClient("karma", make_settings(), db_session_factory)
+    async with db_session_factory() as session:
+        await repos.save_tokens(
+            session,
+            user_label="karma",
+            access_token="stale",
+            refresh_token="db-refresh",
+            expires_at=datetime.now(tz=UTC) - timedelta(hours=1),
+        )
 
     refreshes: list[str] = []
 
@@ -145,11 +156,7 @@ async def test_first_refresh_creates_the_account_row(
 
     first = await client.get_client()
     assert first.auth == "fresh"  # type: ignore[attr-defined]
-
-    async with db_session_factory() as session:
-        stored = await repos.get_account(session, "karma")
-    assert stored is not None, "the token row must be created on first refresh"
-    assert stored.access_token == "fresh"
+    assert refreshes == ["db-refresh"]
 
     second = await client.get_client()
     assert second.auth == "fresh"  # type: ignore[attr-defined]
