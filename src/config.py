@@ -79,6 +79,14 @@ class Settings(BaseSettings):
             "no Origin (curl, the Electron main process) are unaffected."
         ),
     )
+    sidecar_allowed_hosts: str = Field(
+        default="127.0.0.1,localhost",
+        description=(
+            "Comma-separated Host header values the sidecar answers to. Add the public "
+            "hostname when it sits behind a reverse proxy; anything else is rejected, "
+            "which is what stops DNS rebinding."
+        ),
+    )
     sidecar_auth_token: str = Field(
         default="",
         description=(
@@ -93,6 +101,13 @@ class Settings(BaseSettings):
     def allowed_origins(self) -> list[str]:
         """Parse sidecar_allowed_origins into a list (blank entries dropped)."""
         return [o.strip() for o in self.sidecar_allowed_origins.split(",") if o.strip()]
+
+    def allowed_hosts(self) -> list[str]:
+        """Host header allowlist, always including the bind address itself."""
+        hosts = [h.strip() for h in self.sidecar_allowed_hosts.split(",") if h.strip()]
+        if self.sidecar_host not in hosts:
+            hosts.append(self.sidecar_host)
+        return hosts
 
     # Local DJ library (watched folder imported by Rekordbox/Serato)
     library_dir: str = Field(

@@ -148,10 +148,7 @@ def create_app(context: AppContext) -> FastAPI:
     # Outermost: a DNS-rebound page (evil.com resolving to 127.0.0.1) sends
     # same-origin requests with NO Origin header, sailing past the origin
     # filter — but its Host header still says evil.com.
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=list({context.settings.sidecar_host, "127.0.0.1", "localhost"}),
-    )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=context.settings.allowed_hosts())
 
     @app.get("/health")
     async def health(ctx: AppContext = Depends(get_context)) -> dict[str, object]:

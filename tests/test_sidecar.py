@@ -26,7 +26,7 @@ def _make_ctx() -> MagicMock:
     ctx.fetch_likes = AsyncMock(return_value=3)
     ctx.settings.allowed_origins.return_value = ["http://localhost:5173"]
     ctx.settings.sidecar_auth_token = ""  # origin-filter mode unless a test opts in
-    ctx.settings.sidecar_host = "127.0.0.1"
+    ctx.settings.allowed_hosts.return_value = ["127.0.0.1", "karmify.example"]
     return ctx
 
 
@@ -470,6 +470,13 @@ def test_untrusted_host_rejected() -> None:
     with _client(_make_ctx()) as c:
         r = c.get("/health", headers={"host": "evil.example"})
     assert r.status_code == 400
+
+
+def test_configured_public_host_accepted() -> None:
+    """Behind a reverse proxy the Host is the public name, not the bind address."""
+    with _client(_make_ctx()) as c:
+        r = c.get("/health", headers={"host": "karmify.example"})
+    assert r.status_code == 200
 
 
 def test_tracks_limit_bounds() -> None:
