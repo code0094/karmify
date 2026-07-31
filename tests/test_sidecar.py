@@ -355,6 +355,29 @@ def test_init_playlists_reports_counts() -> None:
     assert r.json() == {"created": 5, "skipped": 0}
 
 
+def test_spotify_api_refusal_maps_to_502_with_readable_detail() -> None:
+    """Spotify's Premium-wall 403 must not surface as a bare 500."""
+    from spotipy.exceptions import SpotifyException
+
+    ctx = _make_ctx()
+    ctx.init_default_playlists = AsyncMock(
+        side_effect=SpotifyException(
+            403,
+            -1,
+            "https://api.spotify.com/v1/me/:\n Active premium subscription required "
+            "for the owner of the app.",
+        )
+    )
+
+    with _client(ctx) as c:
+        r = c.post("/playlists/init")
+
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "premium" in detail.lower()
+    assert "api.spotify.com" not in detail  # the URL noise is stripped
+
+
 def test_init_playlists_maps_missing_auth_to_400() -> None:
     from src.spotify.client import NotAuthorizedError
 

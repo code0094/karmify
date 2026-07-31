@@ -24,7 +24,10 @@ export function App() {
 
   const push = useCallback((kind: ToastKind, text: string) => {
     toastSeq.current += 1;
-    setToasts((prev) => [...prev, { id: toastSeq.current, kind, text }]);
+    const id = toastSeq.current;
+    // The same message twice (StrictMode double-effects, repeated failures)
+    // must not stack up as visual noise.
+    setToasts((prev) => (prev.some((t) => t.text === text) ? prev : [...prev, { id, kind, text }]));
   }, []);
   const dismiss = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -36,8 +39,10 @@ export function App() {
     setPlaylists(p);
   }, []);
 
-  useEffect(() => {
-    reload().catch(() => push("error", "Бэкенд недоступен — проверь туннель до сайдкара"));
+  const [backendDown, setBackendDown] = useState(false);
+
+  const loadEverything = useCallback(async () => {
+    await reload();
     api
       .spotifyStatus()
       .then(setAccounts)
@@ -46,7 +51,29 @@ export function App() {
       .then((r) => r.json())
       .then((d: { sources?: string[] }) => setSources(d.sources ?? []))
       .catch(() => undefined);
-  }, [reload, push]);
+  }, [reload]);
+
+  useEffect(() => {
+    loadEverything().catch(() => {
+      setBackendDown(true);
+      push("error", "Бэкенд недоступен — проверь туннель до сайдкара");
+    });
+  }, [loadEverything, push]);
+
+  // The sidecar restarts on every deploy and the SSH tunnel can flap —
+  // keep retrying instead of leaving a dead app behind an error toast.
+  useEffect(() => {
+    if (!backendDown) return;
+    const timer = setInterval(() => {
+      loadEverything()
+        .then(() => {
+          setBackendDown(false);
+          push("success", "Бэкенд снова на связи");
+        })
+        .catch(() => undefined);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [backendDown, loadEverything, push]);
 
   // Fire-and-poll: while anything is downloading, refresh so ⏳ turns into ✓.
   const downloadsRunning =

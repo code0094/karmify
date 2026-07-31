@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
+from spotipy.exceptions import SpotifyException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from src.db import repos
@@ -127,6 +128,16 @@ def create_app(context: AppContext) -> FastAPI:
             logger.info("sidecar.stopped")
 
     app = FastAPI(title="AUX DJ Sidecar", lifespan=lifespan)
+
+    @app.exception_handler(SpotifyException)
+    async def spotify_refusal(_request: Request, exc: SpotifyException) -> JSONResponse:
+        """Spotify's refusals (Premium wall, revoked scopes) as a readable 502.
+
+        spotipy prefixes the message with the request URL — noise for a toast.
+        """
+        detail = str(exc.msg or exc).split(":\n", 1)[-1].strip()
+        logger.warning("sidecar.spotify_refused", status=exc.http_status, detail=detail)
+        return JSONResponse(status_code=502, content={"detail": f"Spotify: {detail}"})
 
     # The sidecar listens on a fixed localhost port and has no authentication,
     # so any page in the user's browser could otherwise drive it (downloads,
