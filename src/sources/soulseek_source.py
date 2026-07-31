@@ -108,7 +108,9 @@ class SoulseekSource(MusicSource):
                 results.append(
                     SearchResult(
                         source=self.name,
-                        title=Path(filename).stem,
+                        # Peers send Windows paths; Path() on Linux would keep
+                        # the whole thing as one name.
+                        title=Path(filename.replace("\\", "/")).stem,
                         artist=username,
                         download_ref=f"{username}|{filename}",
                         audio_format=fmt,
@@ -119,8 +121,9 @@ class SoulseekSource(MusicSource):
                     )
                 )
 
-        # Lossless first, then by size (proxy for quality).
-        results.sort(key=lambda r: (not r.is_lossless, -(r.size_bytes or 0)))
+        # Lossless first, then by bitrate. Sorting by size would promote whole
+        # albums shared as one 300 MB file over the single track being looked for.
+        results.sort(key=lambda r: (not r.is_lossless, -(r.bitrate or 0), -(r.size_bytes or 0)))
         return results[:limit]
 
     async def download(self, result: SearchResult, dest_dir: Path) -> Path:

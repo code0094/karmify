@@ -269,3 +269,56 @@ async def test_soulseek_search_stops_once_enough_answers_arrived(
 
     assert results[0].audio_format == "flac"
     assert fake.searches.state.call_count == 3  # 2 polls + the fetch, no waiting it out
+
+
+@pytest.mark.asyncio
+async def test_soulseek_titles_drop_the_windows_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Peers send Windows paths; Path() on Linux keeps them whole."""
+    src = SoulseekSource("http://x", "key", "/dl", search_timeout=0)
+    fake = MagicMock()
+    fake.searches.search_text.return_value = {"id": "s1"}
+    fake.searches.state.return_value = {
+        "isComplete": True,
+        "responses": [
+            {
+                "username": "u",
+                "files": [
+                    {
+                        "filename": r"@@abc\Music\Daft Punk\Robot Rock.flac",
+                        "size": 10,
+                        "bitRate": 900,
+                    }
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(src, "_client", lambda: fake)
+
+    results = await src.search("robot rock")
+
+    assert results[0].title == "Robot Rock"
+
+
+@pytest.mark.asyncio
+async def test_soulseek_prefers_bitrate_over_raw_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 300 MB album shared as one file must not outrank the actual track."""
+    src = SoulseekSource("http://x", "key", "/dl", search_timeout=0)
+    fake = MagicMock()
+    fake.searches.search_text.return_value = {"id": "s1"}
+    fake.searches.state.return_value = {
+        "isComplete": True,
+        "responses": [
+            {
+                "username": "u",
+                "files": [
+                    {"filename": r"a\whole album.flac", "size": 350_000_000, "bitRate": 900},
+                    {"filename": r"a\single track.flac", "size": 40_000_000, "bitRate": 1100},
+                ],
+            }
+        ],
+    }
+    monkeypatch.setattr(src, "_client", lambda: fake)
+
+    results = await src.search("track")
+
+    assert results[0].title == "single track"
