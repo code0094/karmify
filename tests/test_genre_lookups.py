@@ -132,6 +132,24 @@ async def test_lastfm_weight_filter_on_string_weights() -> None:
     ]
 
     assert await get_top_tags(network, "ROD", "Akephale") == ["techno"]
+    network.get_artist.assert_not_called()  # the track answered, no need to ask
+
+
+@pytest.mark.asyncio
+async def test_lastfm_falls_back_to_artist_tags() -> None:
+    """Niche club tracks often carry no tags while the artist is tagged well."""
+    network = MagicMock()
+    network.get_track.return_value.get_top_tags.return_value = []
+    network.get_artist.return_value.get_top_tags.return_value = [
+        _tag("techno", "100"),
+        _tag("detroit techno", "88"),
+        _tag("obscure", "12"),
+    ]
+
+    tags = await get_top_tags(network, "Jeff Mills", "The Bells")
+
+    assert tags == ["techno", "detroit techno"]  # weight filter still applies
+    network.get_artist.assert_called_once_with("Jeff Mills")
 
 
 @pytest.mark.asyncio
