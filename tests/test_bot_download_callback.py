@@ -180,3 +180,42 @@ async def test_reassign_removes_from_spotify_before_clearing_db(
         cleared = await repos.get_track_by_id(session, track.id)
     assert cleared is not None
     assert cleared.assigned_playlist_id is None
+
+
+async def test_second_press_while_downloading_is_refused(
+    db_session_factory: Factory,
+    track: LikedTrack,
+    make_settings: Callable[..., Settings],
+    tmp_path: Path,
+) -> None:
+    """The button stays live for minutes — a second press must not start a
+    second zotify run over the same scratch directory."""
+    audio = tmp_path / "akephale.mp3"
+    audio.write_bytes(b"x" * 16)
+    gate = asyncio.Event()
+    downloader = MagicMock()
+
+    async def slow_download(_track_id: str) -> Path:
+        await gate.wait()
+        return audio
+
+    downloader.download = slow_download
+    setup_callback_router(db_session_factory, {}, downloader, _settings(make_settings))
+    handler = _get_handler("handle_download")
+
+    first = _callback(track.id)
+    await handler(first)  # spawns the background task and claims the slot
+    await asyncio.sleep(0.01)
+
+    second = _callback(track.id)
+    await handler(second)
+    assert second.answer.await_args.kwargs.get("show_alert") is True
+    assert "качивается" in second.answer.await_args.args[0]
+
+    gate.set()
+    await _drain_background_tasks()
+
+    # Slot released once finished: a fresh press now hits the "already downloaded" guard.
+    third = _callback(track.id)
+    await handler(third)
+    assert "уже скачан" in third.answer.await_args.args[0]

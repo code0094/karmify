@@ -41,6 +41,9 @@ router = Router()
 # so an unreferenced one can be garbage-collected mid-download.
 _background_tasks: set[asyncio.Task[None]] = set()
 
+# Track ids with a download in flight (mirrors AppContext's single-flight guard).
+_downloading: set[int] = set()
+
 
 def _spawn(coro: Coroutine[Any, Any, None]) -> None:
     """Run a coroutine in the background, keeping a strong reference to it."""
@@ -223,6 +226,13 @@ def setup_callback_router(
         if track.downloaded_at:
             await callback.answer("Трек уже скачан", show_alert=True)
             return
+        # The button stays live for the whole download (minutes), so a second
+        # press is routine, not a millisecond race — and two zotify runs would
+        # share one scratch directory and hit the burner account twice.
+        if track_db_id in _downloading:
+            await callback.answer("Уже скачивается…", show_alert=True)
+            return
+        _downloading.add(track_db_id)
 
         # Downloading takes far longer than Telegram's ~15s callback window, so
         # ack immediately and run the actual download in a background task.
@@ -230,6 +240,14 @@ def setup_callback_router(
         _spawn(_run_download(callback, track_db_id, track.spotify_track_id))
 
     async def _run_download(
+        callback: CallbackQuery, track_db_id: int, spotify_track_id: str
+    ) -> None:
+        try:
+            await _download_and_deliver(callback, track_db_id, spotify_track_id)
+        finally:
+            _downloading.discard(track_db_id)
+
+    async def _download_and_deliver(
         callback: CallbackQuery, track_db_id: int, spotify_track_id: str
     ) -> None:
         try:
