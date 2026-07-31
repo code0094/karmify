@@ -240,3 +240,30 @@ async def test_soulseek_finds_files_with_glob_special_chars(
 
     assert path.name == name
     assert path.read_bytes() == b"flac"
+
+
+@pytest.mark.asyncio
+async def test_soulseek_search_stops_once_enough_answers_arrived(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Soulseek search stays open ~a minute while peers answer; waiting for
+    completion would make every search feel broken."""
+    src = SoulseekSource("http://x", "key", "/dl", search_timeout=30)
+
+    fake = MagicMock()
+    fake.searches.search_text.return_value = {"id": "s1"}
+    # Never completes; the response count grows instead.
+    fake.searches.state.side_effect = [
+        {"isComplete": False, "responseCount": 1},
+        {"isComplete": False, "responseCount": 40},
+    ]
+    fake.searches.search_responses.return_value = [
+        {"username": "u", "files": [{"filename": r"a\song.flac", "size": 100}]}
+    ]
+    monkeypatch.setattr(src, "_client", lambda: fake)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    results = await src.search("daft punk", limit=5)
+
+    assert results[0].audio_format == "flac"
+    assert fake.searches.state.call_count == 2  # stopped early, did not wait it out

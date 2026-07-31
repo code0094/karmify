@@ -41,7 +41,7 @@ class SoulseekSource(MusicSource):
         api_key: str,
         downloads_dir: str,
         *,
-        search_timeout: float = 20.0,
+        search_timeout: float = 30.0,
         download_timeout: float = 600.0,
     ) -> None:
         if not slskd_url or not api_key:
@@ -62,7 +62,8 @@ class SoulseekSource(MusicSource):
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(self._search_blocking, query, limit),
-                timeout=self._search_timeout + 10,
+                # Fetching the responses takes a few seconds on top of the wait.
+                timeout=self._search_timeout + 20,
             )
         except TimeoutError as exc:
             raise SourceError(f"Soulseek search timed out for {query!r}") from exc
@@ -74,11 +75,22 @@ class SoulseekSource(MusicSource):
         search = client.searches.search_text(searchText=query)
         search_id = search["id"]
 
-        # Wait for the search to complete (or until our soft timeout).
+        # A Soulseek search stays open for a minute or so while peers trickle in
+        # answers — waiting for completion would make every search feel broken.
+        # Stop as soon as there is plenty to rank, and take whatever arrived by
+        # the deadline otherwise.
+        enough = max(limit * 2, 20)
         deadline = time.monotonic() + self._search_timeout
         while time.monotonic() < deadline:
             state = client.searches.state(search_id)
             if state.get("isComplete") or state.get("state", "").lower().endswith("completed"):
+                break
+            if (state.get("responseCount") or 0) >= enough:
+                logger.debug(
+                    "source.soulseek.search_early_stop",
+                    query=query,
+                    responses=state.get("responseCount"),
+                )
                 break
             time.sleep(1.0)
 
