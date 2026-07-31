@@ -12,7 +12,7 @@ instead (portable fix would be func.max, which ignores NULLs).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -340,8 +340,12 @@ async def test_stale_claim_is_taken_over(db_session: AsyncSession) -> None:
     track = await repos.insert_liked_track(db_session, _track())
     await repos.claim_download(db_session, track.id, stale_after_sec=600)
 
-    # Same call with a zero-length staleness window: the claim is already old.
-    assert await repos.claim_download(db_session, track.id, stale_after_sec=0) is True
+    # Age the claim explicitly — comparing two timestamps taken microseconds
+    # apart would make this depend on how fast the machine is.
+    track.download_started_at = datetime.now().astimezone() - timedelta(hours=1)
+    await db_session.commit()
+
+    assert await repos.claim_download(db_session, track.id, stale_after_sec=600) is True
 
 
 async def test_downloaded_track_cannot_be_claimed(db_session: AsyncSession) -> None:
