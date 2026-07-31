@@ -33,7 +33,12 @@ def upgrade() -> None:
         sa.Column("access_token", sa.Text(), nullable=False),
         sa.Column("refresh_token", sa.Text(), nullable=False),
         sa.Column("token_expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
     )
     op.create_table(
         "genre_playlists",
@@ -59,7 +64,12 @@ def upgrade() -> None:
         sa.Column("telegram_message_id", sa.BigInteger()),
         sa.Column("downloaded_at", sa.DateTime(timezone=True)),
         sa.Column("download_path", sa.String(1000)),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.UniqueConstraint("spotify_track_id", "liked_by"),
     )
     op.create_table(
