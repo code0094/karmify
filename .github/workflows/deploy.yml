@@ -1,0 +1,57 @@
+name: Deploy
+
+# Deploys only after CI passes on main. Manual runs are allowed for redeploys.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # workflow_run fires regardless of the outcome — only ship green builds.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Open an SSH session to the server
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf 'Host deploy\n  HostName %s\n  User root\n  IdentityFile ~/.ssh/id_ed25519\n' "$SSH_HOST" > ~/.ssh/config
+
+      - name: Deploy
+        run: |
+          ssh deploy 'set -e
+            cd /opt/aux-dj-bot
+            git fetch origin --prune
+            git reset --hard origin/main
+            .venv/bin/pip install -q -e .
+            .venv/bin/alembic upgrade head
+            systemctl restart karmify-sidecar
+          '
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 10); do
+            code=$(ssh deploy 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8765/health' || true)
+            if [ "$code" = "200" ]; then echo "sidecar healthy"; exit 0; fi
+            echo "attempt $i: got '$code', retrying"; sleep 3
+          done
+          echo "sidecar did not become healthy — recent logs:"
+          ssh deploy 'journalctl -u karmify-sidecar -n 40 --no-pager'
+          exit 1
