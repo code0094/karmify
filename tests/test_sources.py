@@ -322,3 +322,17 @@ async def test_soulseek_prefers_bitrate_over_raw_size(monkeypatch: pytest.Monkey
     results = await src.search("track")
 
     assert results[0].title == "single track"
+
+
+@pytest.mark.asyncio
+async def test_soulseek_unreachable_peer_is_a_source_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Peers behind NAT are routinely unreachable; that must not surface as a 500."""
+    src = SoulseekSource("http://x", "key", str(tmp_path))
+    fake = MagicMock()
+    fake.transfers.enqueue.side_effect = RuntimeError("500 Server Error")
+    monkeypatch.setattr(src, "_client", lambda: fake)
+
+    with pytest.raises(SourceError, match="unreachable"):
+        await src.download(_soulseek_result(), tmp_path / "out")

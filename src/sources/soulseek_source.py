@@ -151,7 +151,17 @@ class SoulseekSource(MusicSource):
         client = self._client()
         size = result.size_bytes or 0
 
-        client.transfers.enqueue(username=username, files=[{"filename": filename, "size": size}])
+        try:
+            client.transfers.enqueue(
+                username=username, files=[{"filename": filename, "size": size}]
+            )
+        except Exception as exc:
+            # Peers behind NAT are routinely unreachable — that is a source
+            # failure to report and retry elsewhere, not a server error.
+            logger.warning("source.soulseek.enqueue_failed", user=username, error=str(exc))
+            raise SourceError(
+                f"Soulseek peer {username!r} is unreachable — try another result"
+            ) from exc
 
         basename = Path(filename.replace("\\", "/")).name
         deadline = time.monotonic() + self._download_timeout
