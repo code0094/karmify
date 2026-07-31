@@ -1,0 +1,476 @@
+/* Karmify theme: design tokens + component classes. Dark only — DJ software. */
+
+:root {
+  --bg: #0e0f11;
+  --panel: #16181b;
+  --panel-hover: #1d2024;
+  --border: #26292e;
+  --text: #e8e8ea;
+  --dim: #96979d;
+  --accent: #ff6a3d;
+  --accent-soft: rgba(255, 106, 61, 0.14);
+  --green: #3ecf6e;
+  --green-soft: rgba(62, 207, 110, 0.14);
+  --yellow: #e8c14a;
+  --red: #e2564a;
+  --red-soft: rgba(226, 86, 74, 0.14);
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+}
+
+/* ---- app frame ---------------------------------------------------------- */
+
+.app {
+  display: grid;
+  height: 100vh;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 190px 1fr;
+  grid-template-areas:
+    "header header"
+    "nav content"
+    "player player";
+}
+
+.header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.logo {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.nav {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.content {
+  grid-area: content;
+  overflow: auto;
+  padding: 16px;
+}
+
+.player-bar {
+  grid-area: player;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.player-bar audio {
+  flex: 1;
+  height: 32px;
+}
+
+.player-label {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- controls ----------------------------------------------------------- */
+
+button {
+  font: inherit;
+}
+
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-accent {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-accent:hover:not(:disabled) {
+  background: #ff7e57;
+}
+
+.btn-icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.btn-icon:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--panel-hover);
+}
+
+.chip-ok {
+  color: var(--text);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.dot-ok {
+  background: var(--green);
+}
+
+input[type="text"],
+select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+input[type="text"]:focus,
+select:focus {
+  outline: 1px solid var(--accent);
+}
+
+/* ---- inbox cards -------------------------------------------------------- */
+
+.inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 860px;
+}
+
+.card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.preview-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.preview-row audio {
+  height: 30px;
+}
+
+.genre-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.genre-row .suggested {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---- library ------------------------------------------------------------ */
+
+.library {
+  display: grid;
+  grid-template-columns: 230px 1fr;
+  gap: 16px;
+  height: 100%;
+}
+
+.playlist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+}
+
+.playlist-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.playlist-item:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+.playlist-item.active {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.playlist-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-progress {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.playlist-progress.complete {
+  color: var(--green);
+}
+
+.library-main {
+  min-width: 0;
+  overflow: auto;
+}
+
+.library-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+/* ---- tables ------------------------------------------------------------- */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--dim);
+  font-weight: 600;
+  text-align: left;
+}
+
+.table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table tr:hover td {
+  background: var(--panel);
+}
+
+/* ---- status + format badges --------------------------------------------- */
+
+.fmt {
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--panel-hover);
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.fmt-lossless {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.status-ok {
+  color: var(--green);
+}
+
+.status-busy {
+  color: var(--yellow);
+}
+
+.status-err {
+  color: var(--red);
+  cursor: help;
+}
+
+.dim {
+  color: var(--dim);
+}
+
+/* ---- empty states ------------------------------------------------------- */
+
+.empty {
+  max-width: 460px;
+  margin: 48px auto;
+  text-align: center;
+  color: var(--dim);
+}
+
+.empty h3 {
+  margin-bottom: 6px;
+  color: var(--text);
+}
+
+/* ---- toasts ------------------------------------------------------------- */
+
+.toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 64px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 380px;
+}
+
+.toast {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--dim);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+.toast-success {
+  border-left-color: var(--green);
+}
+
+.toast-error {
+  border-left-color: var(--red);
+}

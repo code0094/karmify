@@ -1,5 +1,5 @@
 // Preload (CommonJS): expose the sidecar URL to the renderer safely.
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
 
 const host = process.env.AUX_SIDECAR_HOST || "127.0.0.1";
 const port = process.env.AUX_SIDECAR_PORT || "8765";
@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld("aux", {
   sidecarUrl: `http://${host}:${port}`,
   // Shared secret minted by the main process for this run (see main.js).
   sidecarToken: process.env.AUX_SIDECAR_TOKEN || "",
+  // 30-second track preview lookup (iTunes) — done in the main process.
+  previewSearch: (term) => ipcRenderer.invoke("preview:search", String(term)),
 });

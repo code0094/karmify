@@ -1,14 +1,24 @@
-interface PlayerProps {
-  src: string | null;
+export interface NowPlaying {
+  src: string;
+  label: string;
 }
 
-export function Player({ src }: PlayerProps) {
+interface PlayerProps {
+  playing: NowPlaying | null;
+}
+
+export function Player({ playing }: PlayerProps) {
   return (
-    <div style={{ borderTop: "1px solid #333", padding: "8px 12px", background: "#1a1a1a" }}>
-      {src ? (
-        <audio controls autoPlay src={src} style={{ width: "100%" }} />
+    <div className="player-bar">
+      {playing ? (
+        <>
+          <span className="player-label" title={playing.label}>
+            {playing.label}
+          </span>
+          <audio controls autoPlay src={playing.src} />
+        </>
       ) : (
-        <span style={{ color: "#888" }}>Выбери скачанный трек, чтобы прослушать</span>
+        <span className="dim">Выбери скачанный трек, чтобы прослушать</span>
       )}
     </div>
   );

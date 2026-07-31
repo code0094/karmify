@@ -1,8 +1,9 @@
 // Electron main process: launches the Python sidecar, then opens the window.
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -71,6 +72,36 @@ function waitForUrl(url, what, retries = 60) {
 
 const waitForSidecar = (retries = 60) =>
   waitForUrl(`${SIDECAR_URL}/health`, "sidecar", retries);
+
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, { headers: { "User-Agent": "Karmify/0.1" } }, (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+          try {
+            resolve(JSON.parse(data));
+          } catch (err) {
+            reject(err);
+          }
+        });
+      })
+      .on("error", reject);
+  });
+}
+
+// 30-second previews for the inbox come from the iTunes Search API: keyless
+// and Spotify-independent. Fetched here in the main process — the renderer
+// can't rely on CORS headers from apple.com.
+ipcMain.handle("preview:search", async (_event, term) => {
+  const query = encodeURIComponent(String(term));
+  const url = `https://itunes.apple.com/search?term=${query}&media=music&entity=song&limit=3`;
+  const data = await fetchJson(url);
+  const hit = (data.results || []).find((r) => r.previewUrl);
+  return hit ? { previewUrl: hit.previewUrl, matched: `${hit.artistName} — ${hit.trackName}` } : null;
+});
 
 async function createWindow() {
   win = new BrowserWindow({

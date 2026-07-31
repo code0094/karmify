@@ -9,6 +9,8 @@ export interface Track {
   assigned_playlist_id: string | null;
   downloaded_at: string | null;
   download_path: string | null;
+  download_started_at: string | null;
+  last_download_error: string | null;
 }
 
 export interface Playlist {
@@ -17,6 +19,10 @@ export interface Playlist {
   playlist_id: string;
   display_name: string;
   emoji: string;
+  total_tracks: number;
+  downloaded: number;
+  downloading: number;
+  failed: number;
 }
 
 export interface SearchResult {

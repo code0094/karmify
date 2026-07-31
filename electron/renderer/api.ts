@@ -1,8 +1,18 @@
 import type { Playlist, SearchResult, Track, TrackFilters } from "./types";
 
+export interface PreviewHit {
+  previewUrl: string;
+  matched: string;
+}
+
 declare global {
   interface Window {
-    aux?: { sidecarUrl: string; sidecarToken?: string };
+    aux?: {
+      sidecarUrl: string;
+      sidecarToken?: string;
+      // Bridged to the Electron main process (absent when served outside Electron).
+      previewSearch?: (term: string) => Promise<PreviewHit | null>;
+    };
   }
 }
 
@@ -59,8 +69,8 @@ export const api = {
   assign(trackId: number, playlistDbId: number): Promise<{ added: boolean }> {
     return request("POST", `/tracks/${trackId}/assign`, { playlist_db_id: playlistDbId });
   },
-  download(trackId: number, source = "spotify"): Promise<{ path: string }> {
-    return request("POST", `/tracks/${trackId}/download`, { source });
+  downloadPlaylist(playlistDbId: number): Promise<{ queued: number }> {
+    return request("POST", `/playlists/${playlistDbId}/download`);
   },
   search(query: string, source = "spotify", limit = 20): Promise<SearchResult[]> {
     return request("POST", "/sources/search", { query, source, limit });
