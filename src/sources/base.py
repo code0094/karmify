@@ -15,7 +15,7 @@ class SearchResult(BaseModel):
     ``download_ref`` is source-specific and is what :meth:`MusicSource.download`
     needs to fetch the file:
       - spotify  → Spotify track ID
-      - soulseek → ``f"{username}\\{filepath}"`` from slskd
+      - soulseek → ``f"{username}|{filepath}"`` from slskd
       - bandcamp → public track/album URL
     """
 

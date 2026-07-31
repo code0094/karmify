@@ -123,9 +123,15 @@ class SoulseekSource(MusicSource):
     def _download_blocking(self, result: SearchResult, dest_dir: Path) -> Path:
         import time
 
-        client = self._client()
         username = result.extra.get("username", "")
         filename = result.extra.get("filename", "")
+        if not username or not filename:
+            raise SourceError(
+                "Soulseek downloads need a search result (username + filename in extra); "
+                f"got download_ref={result.download_ref!r}"
+            )
+
+        client = self._client()
         size = result.size_bytes or 0
 
         client.transfers.enqueue(username=username, files=[{"filename": filename, "size": size}])
@@ -147,11 +153,15 @@ class SoulseekSource(MusicSource):
         raise SourceError(f"Soulseek download did not complete: {basename}")
 
     def _find_completed(self, basename: str) -> Path | None:
-        """Look for the finished file in slskd's downloads directory."""
+        """Look for the finished file in slskd's downloads directory.
+
+        Compared literally: Soulseek filenames are full of ``[FLAC]``/``(...)``,
+        which rglob would treat as glob syntax and never match.
+        """
         assert self._downloads_dir is not None
         if not self._downloads_dir.exists():
             return None
-        for path in self._downloads_dir.rglob(basename):
-            if path.is_file():
+        for path in self._downloads_dir.rglob("*"):
+            if path.is_file() and path.name == basename:
                 return path
         return None

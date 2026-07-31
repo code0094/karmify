@@ -23,6 +23,8 @@ async def get_artist_genres(sp: spotipy.Spotify, track_id: str) -> list[str]:
 
         logger.debug("spotify_genres.result", track_id=track_id, genres=genres)
         return genres
-    except spotipy.SpotifyException:
+    except Exception:
+        # Broad, like the sibling lookups: a genre source must never take the
+        # whole waterfall down (network errors are not SpotifyException).
         logger.exception("spotify_genres.error", track_id=track_id)
         return []

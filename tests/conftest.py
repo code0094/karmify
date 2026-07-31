@@ -2,12 +2,64 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
-from src.db.models import GenrePlaylist, LikedTrack
+from src.config import Settings
+from src.db.models import Base, GenrePlaylist, LikedTrack
+
+# Minimal required settings (everything except the optional groups).
+_REQUIRED_SETTINGS: dict[str, Any] = {
+    "spotify_client_id": "cid",
+    "spotify_client_secret": "secret",
+    "karma_spotify_refresh_token": "rt-karma",
+    "stress303_spotify_refresh_token": "rt-stress",
+    "discogs_user_token": "discogs-token",
+    "lastfm_api_key": "lastfm-key",
+    "lastfm_api_secret": "lastfm-secret",
+    "database_url": "postgresql+asyncpg://user:pass@localhost:5432/test",
+}
+
+
+@pytest.fixture
+def make_settings() -> Callable[..., Settings]:
+    """Build a valid Settings object without reading .env; override via kwargs."""
+
+    def _make(**overrides: Any) -> Settings:
+        return Settings(_env_file=None, **{**_REQUIRED_SETTINGS, **overrides})
+
+    return _make
+
+
+@pytest.fixture
+async def db_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Real in-memory SQLite session factory with the full schema created.
+
+    Prod runs PostgreSQL; SQLite here verifies query logic, not PG specifics
+    (`SELECT FOR UPDATE` is not rendered by the SQLite dialect, and
+    ``DateTime(timezone=True)`` comes back naive). StaticPool is required so
+    ``create_all`` and the sessions share the same in-memory database.
+    """
+    engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
+
+
+@pytest.fixture
+async def db_session(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """One session from db_session_factory (see its fidelity caveats)."""
+    async with db_session_factory() as session:
+        yield session
 
 
 @pytest.fixture
@@ -46,7 +98,10 @@ def mock_discogs() -> MagicMock:
     result = MagicMock()
     result.genres = ["Electronic"]
     result.styles = ["Hardgroove", "Techno"]
-    result.labels = [MagicMock(name="Planet Rhythm")]
+    # NB: MagicMock(name=...) sets the MOCK's name, not .name — build explicitly.
+    label = MagicMock()
+    label.name = "Planet Rhythm"
+    result.labels = [label]
     result.count = 1
     search_results = MagicMock()
     search_results.__getitem__ = MagicMock(return_value=result)

@@ -20,6 +20,7 @@ import asyncio
 import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote_plus
 
 import structlog
 
@@ -67,7 +68,7 @@ class BandcampSource(MusicSource):
     async def search(self, query: str, *, limit: int = 20) -> list[SearchResult]:
         browser = await self._start_browser()
         try:
-            url = f"https://bandcamp.com/search?q={query.replace(' ', '%20')}&item_type=t"
+            url = f"https://bandcamp.com/search?q={quote_plus(query)}&item_type=t"
             page = await browser.get(url)
             await page.sleep(2)
 

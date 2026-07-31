@@ -9,7 +9,7 @@ import structlog
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 
 from src.db.models import LikedTrack
 
@@ -90,14 +90,15 @@ def setup_command_router(
                 if arg == "all":
                     days = 0
                 elif arg.isdigit():
-                    days = int(arg)
+                    # Capped: timedelta overflows on absurd values like 1e10.
+                    days = min(int(arg), 3650)
 
         period_label = f"last {days} days" if days > 0 else "all time"
         since = datetime.now(tz=UTC) - timedelta(days=days) if days > 0 else None
 
         async with session_factory() as session:
             # Base filter
-            base_filter = LikedTrack.created_at >= since if since else True
+            base_filter = LikedTrack.created_at >= since if since else true()
 
             # Total count
             total_q = select(func.count()).select_from(LikedTrack).where(base_filter)
@@ -115,18 +116,14 @@ def setup_command_router(
             )
             user_rows = (await session.execute(user_q)).all()
 
-            # Auto vs manual count
+            # Auto vs manual count. Never use in_/notin_ with None in the list:
+            # SQL compares NULL with =, so `x NOT IN ('manual', NULL)` is never
+            # true and `x IN (..., NULL)` never matches on the NULL entry.
+            is_manual = LikedTrack.genre_source.is_(None) | (LikedTrack.genre_source == "manual")
             auto_q = (
                 select(
-                    func.count()
-                    .filter(LikedTrack.genre_source.notin_(["manual", None]))
-                    .label("auto"),
-                    func.count()
-                    .filter(
-                        LikedTrack.genre_source.in_(["manual", None])
-                        | LikedTrack.genre_source.is_(None)
-                    )
-                    .label("manual"),
+                    func.count().filter(~is_manual).label("auto"),
+                    func.count().filter(is_manual).label("manual"),
                 )
                 .select_from(LikedTrack)
                 .where(base_filter)

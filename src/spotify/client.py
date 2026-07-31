@@ -16,6 +16,11 @@ logger = structlog.get_logger()
 SCOPES = "user-library-read playlist-modify-public playlist-modify-private"
 
 
+def _as_aware(value: datetime) -> datetime:
+    """PostgreSQL returns aware datetimes; a naive one must not raise here."""
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
 class SpotifyClient:
     """Manages a Spotify API client for one user account with DB-backed token refresh."""
 
@@ -28,7 +33,6 @@ class SpotifyClient:
         self.user_label = user_label
         self._settings = settings
         self._session_factory = session_factory
-        self._sp: spotipy.Spotify | None = None
         self._oauth = SpotifyOAuth(
             client_id=settings.spotify_client_id,
             client_secret=settings.spotify_client_secret,
@@ -53,7 +57,7 @@ class SpotifyClient:
         expires_at = datetime.now(tz=UTC) + timedelta(seconds=token_info["expires_in"])
 
         async with self._session_factory() as session:
-            await repos.update_tokens(
+            await repos.save_tokens(
                 session,
                 user_label=self.user_label,
                 access_token=access_token,
@@ -69,11 +73,10 @@ class SpotifyClient:
         async with self._session_factory() as session:
             account = await repos.get_account(session, self.user_label)
 
-        if account and account.token_expires_at > datetime.now(tz=UTC):
+        if account and _as_aware(account.token_expires_at) > datetime.now(tz=UTC):
             access_token = account.access_token
         else:
             refresh_token = account.refresh_token if account else self._get_refresh_token()
             access_token = await self._refresh_and_store(refresh_token)
 
-        self._sp = spotipy.Spotify(auth=access_token)
-        return self._sp
+        return spotipy.Spotify(auth=access_token)

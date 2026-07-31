@@ -43,8 +43,8 @@ async def resolve_genre(
 ) -> GenreResult:
     """Run the genre resolution waterfall for a track."""
 
-    # Fetch label once (not per waterfall level)
-    label = await discogs_lookup.get_label(discogs, artist_name, track_name)
+    # One Discogs search serves both the label and cascade level 2 (60 req/min).
+    discogs_tags, label = await discogs_lookup.search_release(discogs, artist_name, track_name)
 
     # Level 1: Spotify artist genres
     raw_genres = await spotify_genres.get_artist_genres(sp, track_id)
@@ -58,8 +58,8 @@ async def resolve_genre(
                 label=label,
             )
 
-    # Level 2: Discogs genre + style
-    raw_genres = await discogs_lookup.search_genre(discogs, artist_name, track_name)
+    # Level 2: Discogs genre + style (from the search above)
+    raw_genres = discogs_tags
     if raw_genres:
         genre_key = await map_to_genre_key(session_factory, raw_genres)
         if genre_key:

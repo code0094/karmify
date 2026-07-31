@@ -83,3 +83,136 @@ async def test_poller_skips_existing_tracks() -> None:
         await poll_user_likes(client, factory, on_new_track)
 
     on_new_track.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_poller_skips_null_track_items() -> None:
+    """Spotify returns "track": null for deleted/unavailable liked tracks.
+
+    Crashing here would be silently swallowed by poll_all_users while
+    last_liked_at never advances — every older like would stop syncing.
+    """
+    sp = MagicMock()
+    sp.current_user_saved_tracks.return_value = {
+        "items": [
+            {"added_at": "2026-03-08T12:00:00Z", "track": None},
+            {
+                "added_at": "2026-03-08T11:00:00Z",
+                "track": {"id": "ok", "name": "Real", "artists": [{"name": "ROD"}]},
+            },
+        ]
+    }
+
+    client = AsyncMock()
+    client.user_label = "karma"
+    client.get_client = AsyncMock(return_value=sp)
+
+    session = AsyncMock()
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    on_new_track = AsyncMock()
+
+    with (
+        patch("src.spotify.poller.repos.get_last_liked_at", return_value=None),
+        patch("src.spotify.poller.repos.track_exists", return_value=False),
+        patch("src.spotify.poller.repos.insert_liked_track", side_effect=lambda s, t: t),
+    ):
+        new_count = await poll_user_likes(client, factory, on_new_track)
+
+    assert new_count == 1
+    assert on_new_track.await_args.args[0].spotify_track_id == "ok"
+
+
+@pytest.mark.asyncio
+async def test_poller_continues_when_on_new_track_fails() -> None:
+    """The track is already committed, so track_exists() skips it forever after.
+
+    A failing genre resolution or Telegram notification must not cost the
+    remaining tracks their turn.
+    """
+    sp = MagicMock()
+    sp.current_user_saved_tracks.return_value = {
+        "items": [
+            {
+                "added_at": "2026-03-08T12:00:00Z",
+                "track": {"id": "boom", "name": "A", "artists": [{"name": "ROD"}]},
+            },
+            {
+                "added_at": "2026-03-08T11:00:00Z",
+                "track": {"id": "fine", "name": "B", "artists": [{"name": "ROD"}]},
+            },
+        ]
+    }
+
+    client = AsyncMock()
+    client.user_label = "karma"
+    client.get_client = AsyncMock(return_value=sp)
+
+    session = AsyncMock()
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    seen: list[str] = []
+
+    async def on_new_track(track):
+        seen.append(track.spotify_track_id)
+        if track.spotify_track_id == "boom":
+            raise RuntimeError("telegram down")
+
+    with (
+        patch("src.spotify.poller.repos.get_last_liked_at", return_value=None),
+        patch("src.spotify.poller.repos.track_exists", return_value=False),
+        patch("src.spotify.poller.repos.insert_liked_track", side_effect=lambda s, t: t),
+    ):
+        new_count = await poll_user_likes(client, factory, on_new_track)
+
+    # Oldest first, so the older "fine" is stored before the failing "boom".
+    assert seen == ["fine", "boom"]  # the failure did not abort the pass
+    assert new_count == 2
+
+
+@pytest.mark.asyncio
+async def test_poller_stops_on_insert_failure_keeping_cursor_honest() -> None:
+    """A failed insert must stop the pass: committing the newer track first
+    would push last_liked_at past the older one, hiding it forever."""
+    sp = MagicMock()
+    sp.current_user_saved_tracks.return_value = {
+        "items": [
+            {
+                "added_at": "2026-03-08T12:00:00Z",  # newest
+                "track": {"id": "newest", "name": "N", "artists": [{"name": "ROD"}]},
+            },
+            {
+                "added_at": "2026-03-08T11:00:00Z",  # oldest — inserted first
+                "track": {"id": "oldest", "name": "O", "artists": [{"name": "ROD"}]},
+            },
+        ]
+    }
+    client = AsyncMock()
+    client.user_label = "karma"
+    client.get_client = AsyncMock(return_value=sp)
+
+    session = AsyncMock()
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    def insert(_s, track):
+        if track.spotify_track_id == "newest":
+            raise RuntimeError("db down mid-pass")
+        return track
+
+    on_new_track = AsyncMock()
+    with (
+        patch("src.spotify.poller.repos.get_last_liked_at", return_value=None),
+        patch("src.spotify.poller.repos.track_exists", return_value=False),
+        patch("src.spotify.poller.repos.insert_liked_track", side_effect=insert),
+    ):
+        new_count = await poll_user_likes(client, factory, on_new_track)
+
+    assert new_count == 1  # only the oldest made it; the pass stopped at the failure
+    on_new_track.assert_awaited_once()
+    assert on_new_track.await_args.args[0].spotify_track_id == "oldest"

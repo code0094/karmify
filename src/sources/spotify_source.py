@@ -66,6 +66,6 @@ class SpotifySource(MusicSource):
             return path
         if final.exists():
             final.unlink()
-        shutil.move(str(path), str(final))
+        await asyncio.to_thread(shutil.move, str(path), str(final))
         logger.info("source.spotify.downloaded", track=result.download_ref, path=str(final))
         return final

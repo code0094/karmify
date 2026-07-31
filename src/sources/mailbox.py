@@ -86,7 +86,7 @@ class Mailbox:
             if content_type not in ("text/plain", "text/html"):
                 continue
             payload = part.get_payload(decode=True)
-            if payload is None:
+            if not isinstance(payload, bytes):
                 continue
             charset = part.get_content_charset() or "utf-8"
             text = payload.decode(charset, errors="replace")

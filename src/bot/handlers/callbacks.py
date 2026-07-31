@@ -10,13 +10,14 @@ Callback data format:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import CallbackQuery, FSInputFile
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from src.bot.keyboards import build_full_playlist_keyboard, build_reassign_keyboard
 from src.db import repos
@@ -24,6 +25,9 @@ from src.spotify import playlist as spotify_playlist
 from src.spotify.downloader import DownloadError
 
 if TYPE_CHECKING:
+    from collections.abc import Coroutine
+    from typing import Any
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from src.config import Settings
@@ -32,6 +36,22 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 router = Router()
+
+# Background download tasks. The event loop only keeps weak references to tasks,
+# so an unreferenced one can be garbage-collected mid-download.
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+def _spawn(coro: Coroutine[Any, Any, None]) -> None:
+    """Run a coroutine in the background, keeping a strong reference to it."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+def _editable(callback: CallbackQuery) -> Message | None:
+    """The callback's message when it is still accessible (old ones are not)."""
+    return callback.message if isinstance(callback.message, Message) else None
 
 
 def setup_callback_router(
@@ -83,18 +103,19 @@ def setup_callback_router(
                 return
 
             assigned_by = callback.from_user.username or str(callback.from_user.id)
+            message = _editable(callback)
             await repos.assign_track_to_playlist(
                 session,
                 track_db_id,
                 playlist.playlist_id,
                 assigned_by,
-                callback.message.message_id if callback.message else None,
+                message.message_id if message else None,
             )
 
         await callback.answer(f"✅ Добавлено в {playlist.display_name}!")
 
-        if callback.message:
-            await callback.message.edit_reply_markup(
+        if message:
+            await message.edit_reply_markup(
                 reply_markup=build_reassign_keyboard(
                     track_db_id, downloaded=track.downloaded_at is not None
                 )
@@ -124,7 +145,12 @@ def setup_callback_router(
                 return
 
             if track.assigned_at:
-                deadline = track.assigned_at + timedelta(hours=24)
+                # PostgreSQL hands back an aware datetime, but a naive one must
+                # not raise here — comparing it to an aware "now" is a TypeError.
+                assigned_at = track.assigned_at
+                if assigned_at.tzinfo is None:
+                    assigned_at = assigned_at.replace(tzinfo=UTC)
+                deadline = assigned_at + timedelta(hours=24)
                 if datetime.now(tz=UTC) > deadline:
                     await callback.answer(
                         "Прошло больше 24ч, переназначение недоступно", show_alert=True
@@ -134,18 +160,23 @@ def setup_callback_router(
             old_playlist_id = track.assigned_playlist_id
             old_track_id = track.spotify_track_id
             old_liked_by = track.liked_by
+            downloaded = track.downloaded_at is not None
+
+            # Spotify first: clearing the DB before a failed removal would leave
+            # the track in its old playlist while the DB believes it is free —
+            # the next assignment would then put it in two playlists at once.
+            client = spotify_clients.get(old_liked_by)
+            if not client:
+                await callback.answer("Spotify client не найден", show_alert=True)
+                return
+            sp = await client.get_client()
+            await spotify_playlist.remove_track_from_playlist(sp, old_playlist_id, old_track_id)
 
             await repos.assign_track_to_playlist(session, track_db_id, None, None, None)
             playlists = await repos.get_all_playlists(session)
 
-        downloaded = track.downloaded_at is not None
-        client = spotify_clients.get(old_liked_by)
-        if client:
-            sp = await client.get_client()
-            await spotify_playlist.remove_track_from_playlist(sp, old_playlist_id, old_track_id)
-
-        if callback.message:
-            await callback.message.edit_reply_markup(
+        if message := _editable(callback):
+            await message.edit_reply_markup(
                 reply_markup=build_full_playlist_keyboard(
                     track_db_id, playlists, downloaded=downloaded
                 )
@@ -166,8 +197,8 @@ def setup_callback_router(
             track = await repos.get_track_by_id(session, track_db_id)
 
         downloaded = bool(track and track.downloaded_at)
-        if callback.message:
-            await callback.message.edit_reply_markup(
+        if message := _editable(callback):
+            await message.edit_reply_markup(
                 reply_markup=build_full_playlist_keyboard(
                     track_db_id, playlists, downloaded=downloaded
                 )
@@ -192,52 +223,95 @@ def setup_callback_router(
         if track.downloaded_at:
             await callback.answer("Трек уже скачан", show_alert=True)
             return
+        # The button stays live for the whole download (minutes), so a second
+        # press is routine, not a millisecond race — and two zotify runs would
+        # share one scratch directory and hit the burner account twice. The
+        # claim lives in the database because the sidecar is another process
+        # that can be downloading this very track.
+        async with session_factory() as session:
+            claimed = await repos.claim_download(
+                session, track_db_id, stale_after_sec=settings.download_timeout_sec * 2
+            )
+        if not claimed:
+            await callback.answer("Уже скачивается…", show_alert=True)
+            return
 
         # Downloading takes far longer than Telegram's ~15s callback window, so
-        # ack immediately and run the actual download in a background task.
-        await callback.answer("⏳ Скачиваю, это займёт время…")
-        asyncio.create_task(_run_download(callback, track_db_id, track.spotify_track_id))
+        # ack immediately and run the actual download in a background task. The
+        # ack itself can fail (stale callback query, flood control) — release
+        # the claim then, or the track could never be downloaded again.
+        try:
+            await callback.answer("⏳ Скачиваю, это займёт время…")
+        except Exception:
+            async with session_factory() as session:
+                await repos.release_download(session, track_db_id)
+            raise
+        _spawn(_run_download(callback, track_db_id, track.spotify_track_id))
 
     async def _run_download(
+        callback: CallbackQuery, track_db_id: int, spotify_track_id: str
+    ) -> None:
+        try:
+            await _download_and_deliver(callback, track_db_id, spotify_track_id)
+        finally:
+            # mark_track_downloaded clears the claim on success; this covers
+            # every failure path so the track stays retryable.
+            async with session_factory() as session:
+                await repos.release_download(session, track_db_id)
+
+    async def _download_and_deliver(
         callback: CallbackQuery, track_db_id: int, spotify_track_id: str
     ) -> None:
         try:
             path = await downloader.download(spotify_track_id)
         except DownloadError as exc:
             logger.warning("download.error", track=spotify_track_id, error=str(exc))
-            if callback.message:
-                await callback.message.reply(f"❌ Не удалось скачать: {exc}")
+            if message := _editable(callback):
+                await message.reply(f"❌ Не удалось скачать: {exc}")
             return
         except Exception:
             logger.exception("download.unexpected", track=spotify_track_id)
-            if callback.message:
-                await callback.message.reply("❌ Не удалось скачать: внутренняя ошибка")
+            if message := _editable(callback):
+                await message.reply("❌ Не удалось скачать: внутренняя ошибка")
             return
 
-        async with session_factory() as session:
-            await repos.mark_track_downloaded(session, track_db_id, str(path))
-            fresh = await repos.get_track_by_id(session, track_db_id)
-            playlists = await repos.get_all_playlists(session)
+        # Nothing below may raise unguarded: this runs as a background task, so
+        # an escaping error would never reach a caller and would only surface in
+        # asyncio's default handler when the task is collected.
+        try:
+            async with session_factory() as session:
+                await repos.mark_track_downloaded(session, track_db_id, str(path))
+                fresh = await repos.get_track_by_id(session, track_db_id)
+                playlists = await repos.get_all_playlists(session)
 
-        size_mb = path.stat().st_size / (1024 * 1024)
-        if settings.download_send_to_chat and callback.message:
-            if size_mb <= settings.telegram_upload_limit_mb:
-                await callback.message.answer_audio(FSInputFile(path))
-            else:
-                await callback.message.reply(
-                    f"✅ Скачано в библиотеку ({size_mb:.0f} МБ — велик для Telegram):\n{path}"
-                )
+            size_mb = path.stat().st_size / (1024 * 1024)
+            message = _editable(callback)
+            if settings.download_send_to_chat and message:
+                if size_mb <= settings.telegram_upload_limit_mb:
+                    await message.answer_audio(FSInputFile(path))
+                else:
+                    await message.reply(
+                        f"✅ Скачано в библиотеку ({size_mb:.0f} МБ — велик для Telegram):\n{path}"
+                    )
 
-        # Refresh the keyboard to mark the track as downloaded.
-        if callback.message:
-            if fresh and fresh.assigned_playlist_id:
-                keyboard = build_reassign_keyboard(track_db_id, downloaded=True)
-            else:
-                keyboard = build_full_playlist_keyboard(track_db_id, playlists, downloaded=True)
-            try:
-                await callback.message.edit_reply_markup(reply_markup=keyboard)
-            except TelegramBadRequest:
-                logger.debug("download.markup_unchanged", track=spotify_track_id)
+            # Refresh the keyboard to mark the track as downloaded.
+            if message:
+                if fresh and fresh.assigned_playlist_id:
+                    keyboard = build_reassign_keyboard(track_db_id, downloaded=True)
+                else:
+                    keyboard = build_full_playlist_keyboard(
+                        track_db_id, playlists, downloaded=True
+                    )
+                try:
+                    await message.edit_reply_markup(reply_markup=keyboard)
+                except TelegramBadRequest:
+                    logger.debug("download.markup_unchanged", track=spotify_track_id)
+        except Exception:
+            logger.exception("download.delivery_failed", track=spotify_track_id, path=str(path))
+            if message := _editable(callback):
+                with contextlib.suppress(Exception):
+                    await message.reply(f"⚠️ Скачано в библиотеку, но не доставлено:\n{path}")
+            return
 
         logger.info("download.delivered", track=spotify_track_id, size_mb=round(size_mb, 1))
 

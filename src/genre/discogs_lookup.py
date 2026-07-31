@@ -8,41 +8,48 @@ import structlog
 logger = structlog.get_logger()
 
 
-async def search_genre(
+async def search_release(
     discogs: discogs_client.Client, artist_name: str, track_name: str
-) -> list[str]:
-    """Search Discogs for a release and return genre + style tags."""
+) -> tuple[list[str], str | None]:
+    """Search Discogs once and return (genre+style tags, record label).
+
+    One search serves both the genre cascade and the label lookup: Discogs is
+    rate-limited to 60 requests/min, and the two used to issue identical queries.
+
+    Returns:
+        A ``(tags, label)`` pair; empty list and ``None`` when nothing is found
+        or the API call fails.
+    """
     try:
         query = f"{artist_name} {track_name}"
         results = await asyncio.to_thread(discogs.search, query, type="release")
 
         if not results or results.count == 0:
-            return []
+            return [], None
 
         release = results[0]
-        genres: list[str] = list(release.genres or [])
-        styles: list[str] = list(release.styles or [])
+        tags: list[str] = list(release.genres or []) + list(release.styles or [])
+        labels = release.labels
+        label = str(labels[0].name) if labels else None
 
-        all_tags = genres + styles
-        logger.debug("discogs.result", artist=artist_name, track=track_name, tags=all_tags)
-        return all_tags
+        logger.debug("discogs.result", artist=artist_name, track=track_name, tags=tags)
+        return tags, label
     except Exception:
         logger.exception("discogs.error", artist=artist_name, track=track_name)
-        return []
+        return [], None
+
+
+async def search_genre(
+    discogs: discogs_client.Client, artist_name: str, track_name: str
+) -> list[str]:
+    """Search Discogs for a release and return genre + style tags."""
+    tags, _ = await search_release(discogs, artist_name, track_name)
+    return tags
 
 
 async def get_label(
     discogs: discogs_client.Client, artist_name: str, track_name: str
 ) -> str | None:
     """Try to find the record label from Discogs."""
-    try:
-        query = f"{artist_name} {track_name}"
-        results = await asyncio.to_thread(discogs.search, query, type="release")
-        if results and results.count > 0:
-            release = results[0]
-            labels = release.labels
-            if labels:
-                return str(labels[0].name)
-    except Exception:
-        logger.exception("discogs.label_error", artist=artist_name, track=track_name)
-    return None
+    _, label = await search_release(discogs, artist_name, track_name)
+    return label

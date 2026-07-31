@@ -7,18 +7,18 @@ high-level operations (fetch likes, search, download) that the HTTP routes call.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import discogs_client
 import pylast
 import structlog
-from sqlalchemy import update
 
 from src.db import repos
 from src.db.engine import build_engine
 from src.db.models import LikedTrack
-from src.genre.resolver import GenreResult, resolve_genre
+from src.genre.pipeline import resolve_and_store_genre
 from src.library.manager import LibraryManager
 from src.sources.base import MusicSource, SearchResult, SourceError
 from src.sources.spotify_source import SpotifySource
@@ -55,6 +55,10 @@ class AppContext:
         self.downloader = TrackDownloader(settings)
         self.library = LibraryManager(settings.library_dir)
         self.sources = self._build_sources()
+        # Ad-hoc search-result downloads in flight, keyed by ref. Liked tracks
+        # use a database claim instead (see repos.claim_download) because the
+        # bot process must see it too.
+        self._downloading_refs: set[str] = set()
 
     def _build_sources(self) -> dict[str, MusicSource]:
         """Construct the available music sources based on configuration."""
@@ -94,25 +98,13 @@ class AppContext:
     async def _on_new_track(self, track: LikedTrack) -> None:
         """Resolve genre for a newly detected like and persist it (no Telegram)."""
         sp = await self.spotify_clients[track.liked_by].get_client()
-        genre_result: GenreResult = await resolve_genre(
-            track_id=track.spotify_track_id,
-            artist_name=track.artist_name or "",
-            track_name=track.track_name or "",
+        await resolve_and_store_genre(
+            track,
             sp=sp,
             discogs=self.discogs,
             lastfm=self.lastfm,
             session_factory=self.session_factory,
         )
-        async with self.session_factory() as session:
-            await session.execute(
-                update(LikedTrack)
-                .where(LikedTrack.id == track.id)
-                .values(
-                    detected_genre=genre_result.genre_key,
-                    genre_source=genre_result.source,
-                )
-            )
-            await session.commit()
 
     async def fetch_likes(self) -> int:
         """Poll Spotify for new likes for all users; returns count of new tracks."""
@@ -124,20 +116,72 @@ class AppContext:
             track = await repos.get_track_by_id(session, track_id)
         if track is None:
             raise SourceError(f"Track {track_id} not found")
+        if track.downloaded_at:
+            raise SourceError(f"Track {track_id} is already downloaded")
 
-        src = self._require_source(source)
-        result = SearchResult(
-            source=source,
-            title=track.track_name or "",
-            artist=track.artist_name or "",
-            download_ref=track.spotify_track_id,
-        )
-        path = await src.download(result, Path(self.settings.download_dir))
-        self.library.add(path, subdir=track.detected_genre)
-
+        # The claim lives in the database: the bot is a separate process, so an
+        # in-memory guard would not see a download it started for this track.
         async with self.session_factory() as session:
-            await repos.mark_track_downloaded(session, track_id, str(path))
+            claimed = await repos.claim_download(
+                session, track_id, stale_after_sec=self.settings.download_timeout_sec * 2
+            )
+        if not claimed:
+            raise SourceError(f"Track {track_id} is already being downloaded")
+
+        try:
+            src = self._require_source(source)
+            result = await self._resolve_candidate(src, source, track)
+
+            # Claim the ref too: /sources/download works by ref, and without
+            # this the same file could be fetched in parallel via both routes.
+            if result.download_ref in self._downloading_refs:
+                raise SourceError(f"Already downloading {result.download_ref}")
+            self._downloading_refs.add(result.download_ref)
+            try:
+                path = await src.download(result, Path(self.settings.download_dir))
+            finally:
+                self._downloading_refs.discard(result.download_ref)
+
+            # copy2 of a large FLAC would stall the event loop.
+            await asyncio.to_thread(self.library.add, path, subdir=track.detected_genre)
+
+            async with self.session_factory() as session:
+                await repos.mark_track_downloaded(session, track_id, str(path))
+        except BaseException:
+            # Release the claim so a retry is possible (mark_track_downloaded
+            # clears it on the success path).
+            async with self.session_factory() as session:
+                await repos.release_download(session, track_id)
+            raise
         return path
+
+    async def _resolve_candidate(
+        self, src: MusicSource, source: str, track: LikedTrack
+    ) -> SearchResult:
+        """Find what to hand the source's download() for a liked track.
+
+        Only Spotify can fetch by track id. Every other source needs a real
+        search hit — its download() reads source-specific fields (a Soulseek
+        username and file path, a Bandcamp URL) that a hand-built result from
+        a Spotify id simply does not carry.
+        """
+        if source == "spotify":
+            return SearchResult(
+                source=source,
+                title=track.track_name or "",
+                artist=track.artist_name or "",
+                download_ref=track.spotify_track_id,
+            )
+
+        query = f"{track.artist_name or ''} {track.track_name or ''}".strip()
+        if not query:
+            raise SourceError(f"Track {track.id} has no artist/title to search {source} with")
+
+        candidates = await src.search(query, limit=10)
+        if not candidates:
+            raise SourceError(f"No {source} match for {query!r}")
+        # Sources rank their own results (Soulseek puts lossless first).
+        return candidates[0]
 
     async def search_sources(
         self, query: str, *, source: str, limit: int = 20
@@ -147,9 +191,15 @@ class AppContext:
 
     async def download_result(self, result: SearchResult) -> Path:
         """Download an arbitrary search result and copy it into the library."""
-        src = self._require_source(result.source)
-        path = await src.download(result, Path(self.settings.download_dir))
-        self.library.add(path)
+        if result.download_ref in self._downloading_refs:
+            raise SourceError(f"Already downloading {result.download_ref}")
+        self._downloading_refs.add(result.download_ref)
+        try:
+            src = self._require_source(result.source)
+            path = await src.download(result, Path(self.settings.download_dir))
+            await asyncio.to_thread(self.library.add, path)
+        finally:
+            self._downloading_refs.discard(result.download_ref)
         return path
 
     def _require_source(self, source: str) -> MusicSource:

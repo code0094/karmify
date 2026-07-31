@@ -13,11 +13,14 @@ timeouts plus a concurrency limit for free.
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
+
+from src.sources.base import SourceError
 
 if TYPE_CHECKING:
     from src.config import Settings
@@ -25,10 +28,16 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 _AUDIO_EXTENSIONS = {".mp3", ".ogg", ".opus", ".m4a", ".aac", ".flac", ".wav"}
+_TRACK_ID_RE = re.compile(r"[A-Za-z0-9]{22}")  # Spotify base62 track id
 
 
-class DownloadError(Exception):
-    """Raised when a track download fails."""
+class DownloadError(SourceError):
+    """Raised when a track download fails.
+
+    Subclasses :class:`SourceError` so transport layers that map source
+    failures (the sidecar's 502 handler) treat zotify failures the same way
+    as Soulseek/Bandcamp ones instead of bubbling a bare 500.
+    """
 
 
 class TrackDownloader:
@@ -60,6 +69,11 @@ class TrackDownloader:
             return await self._run(spotify_track_id)
 
     async def _run(self, spotify_track_id: str) -> Path:
+        # The id becomes a directory name that is later rmtree'd — a value with
+        # separators or ".." would take that deletion outside download_dir.
+        if not _TRACK_ID_RE.fullmatch(spotify_track_id):
+            raise DownloadError(f"недопустимый id трека: {spotify_track_id!r}")
+
         s = self._settings
         self._dest.mkdir(parents=True, exist_ok=True)
 
@@ -98,9 +112,13 @@ class TrackDownloader:
                 proc.communicate(), timeout=s.download_timeout_sec
             )
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await self._abandon(proc, work)
             raise DownloadError(f"таймаут {s.download_timeout_sec}s") from None
+        except asyncio.CancelledError:
+            # Shutdown mid-download: without this the zotify process outlives
+            # us and its scratch directory is left behind.
+            await self._abandon(proc, work)
+            raise
 
         output = (stdout_bytes or b"").decode("utf-8", "replace")
 
@@ -128,6 +146,13 @@ class TrackDownloader:
 
         logger.info("download.done", track=spotify_track_id, path=str(final))
         return final
+
+    @staticmethod
+    async def _abandon(proc: asyncio.subprocess.Process, work: Path) -> None:
+        """Kill a running zotify and drop its scratch directory."""
+        proc.kill()
+        await proc.wait()
+        shutil.rmtree(work, ignore_errors=True)
 
     @staticmethod
     def _find_audio(directory: Path) -> Path | None:

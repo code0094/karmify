@@ -38,8 +38,12 @@ async def poll_user_likes(
 
     logger.info("poller.start", user=user_label, last_liked_at=last_liked_at)
 
+    # Collect first, store second. Spotify returns likes newest-first, and
+    # last_liked_at is a high-water mark: committing a newer track before an
+    # older one succeeds would push the mark past the older one, hiding it from
+    # every later poll. Inserting oldest-first keeps the mark honest.
+    pending: list[LikedTrack] = []
     offset = 0
-    new_count = 0
 
     while True:
         results = await asyncio.to_thread(sp.current_user_saved_tracks, limit=50, offset=offset)
@@ -56,27 +60,49 @@ async def poll_user_likes(
                 stop = True
                 break
 
-            track_data = item["track"]
-            track = LikedTrack(
-                spotify_track_id=track_data["id"],
-                track_name=track_data["name"],
-                artist_name=", ".join(a["name"] for a in track_data["artists"]),
-                liked_by=user_label,
-                liked_at=added_at,
+            # Spotify sends "track": null for deleted/unavailable liked tracks.
+            track_data = item.get("track")
+            if not track_data:
+                logger.info("poller.null_track_skipped", user=user_label, added_at=added_at_str)
+                continue
+
+            pending.append(
+                LikedTrack(
+                    spotify_track_id=track_data["id"],
+                    track_name=track_data["name"],
+                    artist_name=", ".join(a["name"] for a in track_data["artists"]),
+                    liked_by=user_label,
+                    liked_at=added_at,
+                )
             )
-
-            async with session_factory() as session:
-                exists = await repos.track_exists(session, track.spotify_track_id, user_label)
-                if exists:
-                    continue
-                track = await repos.insert_liked_track(session, track)
-
-            new_count += 1
-            await on_new_track(track)
 
         if stop or len(items) < 50:
             break
         offset += 50
+
+    new_count = 0
+    for track in reversed(pending):  # oldest first
+        try:
+            async with session_factory() as session:
+                if await repos.track_exists(session, track.spotify_track_id, user_label):
+                    continue
+                stored = await repos.insert_liked_track(session, track)
+        except Exception:
+            # A failed insert (e.g. the bot and the sidecar polling the same DB)
+            # must not carry the cursor past this track — stop the pass here and
+            # retry it next time.
+            logger.exception("poller.insert_failed", user=user_label, track=track.spotify_track_id)
+            break
+
+        new_count += 1
+        # The row is committed, so track_exists() skips it on every later poll:
+        # a failure here would silently cost it its genre and notification.
+        try:
+            await on_new_track(stored)
+        except Exception:
+            logger.exception(
+                "poller.on_new_track_failed", user=user_label, track=track.spotify_track_id
+            )
 
     logger.info("poller.done", user=user_label, new_tracks=new_count)
     return new_count

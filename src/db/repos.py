@@ -1,8 +1,10 @@
 """Repository-pattern database queries."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import GenreAlias, GenrePlaylist, LikedTrack, SpotifyAccount
@@ -15,14 +17,19 @@ async def get_account(session: AsyncSession, user_label: str) -> SpotifyAccount 
     return result.scalar_one_or_none()
 
 
-async def update_tokens(
+async def save_tokens(
     session: AsyncSession,
     user_label: str,
     access_token: str,
     refresh_token: str,
     expires_at: datetime,
 ) -> None:
-    """Update OAuth tokens for a Spotify account."""
+    """Store OAuth tokens for a Spotify account, creating the row if needed.
+
+    Nothing else ever inserts into ``spotify_accounts``: a plain UPDATE here
+    would silently affect no rows on a fresh database, and every call would go
+    back to Spotify's refresh endpoint instead of reusing a stored token.
+    """
     stmt = (
         update(SpotifyAccount)
         .where(SpotifyAccount.user_label == user_label)
@@ -32,8 +39,26 @@ async def update_tokens(
             token_expires_at=expires_at,
         )
     )
-    await session.execute(stmt)
-    await session.commit()
+    result = await session.execute(stmt)
+    if cast("CursorResult[Any]", result).rowcount:
+        await session.commit()
+        return
+
+    session.add(
+        SpotifyAccount(
+            user_label=user_label,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_expires_at=expires_at,
+        )
+    )
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Another process inserted the row first — update it instead.
+        await session.rollback()
+        await session.execute(stmt)
+        await session.commit()
 
 
 async def track_exists(session: AsyncSession, spotify_track_id: str, liked_by: str) -> bool:
@@ -49,9 +74,8 @@ async def track_exists(session: AsyncSession, spotify_track_id: str, liked_by: s
 async def insert_liked_track(session: AsyncSession, track: LikedTrack) -> LikedTrack:
     """Insert a new liked track. Returns the inserted row with a valid DB id."""
     session.add(track)
-    await session.flush()
+    await session.flush()  # assigns the id; no refresh needed (expire_on_commit=False)
     await session.commit()
-    await session.refresh(track)
     return track
 
 
@@ -137,24 +161,59 @@ async def get_track_for_update(session: AsyncSession, track_id: int) -> LikedTra
     return result.scalar_one_or_none()
 
 
+async def claim_download(session: AsyncSession, track_id: int, *, stale_after_sec: int) -> bool:
+    """Try to claim a track for downloading; True if this caller won the race.
+
+    One conditional UPDATE, serialized by the database, so the bot and the
+    sidecar (separate processes) cannot both start a download for one track.
+    A claim older than ``stale_after_sec`` is taken over — otherwise a process
+    that died mid-download would block the track forever.
+    """
+    now = datetime.now().astimezone()
+    cutoff = now - timedelta(seconds=stale_after_sec)
+    stmt = (
+        update(LikedTrack)
+        .where(
+            LikedTrack.id == track_id,
+            LikedTrack.downloaded_at.is_(None),
+            (LikedTrack.download_started_at.is_(None)) | (LikedTrack.download_started_at < cutoff),
+        )
+        .values(download_started_at=now)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    # UPDATE always yields a CursorResult; Result is just the declared type.
+    return bool(cast("CursorResult[Any]", result).rowcount)
+
+
+async def release_download(session: AsyncSession, track_id: int) -> None:
+    """Drop a download claim (failed attempt); the track can be retried."""
+    stmt = update(LikedTrack).where(LikedTrack.id == track_id).values(download_started_at=None)
+    await session.execute(stmt)
+    await session.commit()
+
+
 async def mark_track_downloaded(session: AsyncSession, track_id: int, download_path: str) -> None:
     """Record that a track's audio has been downloaded to a local path."""
     stmt = (
         update(LikedTrack)
         .where(LikedTrack.id == track_id)
-        .values(downloaded_at=datetime.now().astimezone(), download_path=download_path)
+        .values(
+            downloaded_at=datetime.now().astimezone(),
+            download_path=download_path,
+            download_started_at=None,
+        )
     )
     await session.execute(stmt)
     await session.commit()
 
 
 async def get_last_liked_at(session: AsyncSession, user_label: str) -> datetime | None:
-    """Get the most recent liked_at timestamp for a user."""
-    stmt = (
-        select(LikedTrack.liked_at)
-        .where(LikedTrack.liked_by == user_label)
-        .order_by(LikedTrack.liked_at.desc())
-        .limit(1)
-    )
+    """Get the most recent liked_at timestamp for a user.
+
+    MAX ignores NULLs on every backend; ORDER BY ... DESC LIMIT 1 would return
+    a NULL row first on PostgreSQL and report "no likes yet".
+    """
+    stmt = select(func.max(LikedTrack.liked_at)).where(LikedTrack.liked_by == user_label)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
