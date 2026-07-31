@@ -7,7 +7,6 @@ objects); only the DB repo calls and the sources themselves are substituted.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +40,14 @@ class FakeSource(MusicSource):
     async def download(self, result: SearchResult, dest_dir: Path) -> Path:
         self.downloads.append(result)
         return dest_dir / "ROD - Akephale.mp3"
+
+
+def _stub_claim(monkeypatch: pytest.MonkeyPatch, *, claimed: bool = True) -> AsyncMock:
+    """Stub the DB-backed download claim (exercised for real in test_repos.py)."""
+    monkeypatch.setattr(ctxmod.repos, "claim_download", AsyncMock(return_value=claimed))
+    release = AsyncMock()
+    monkeypatch.setattr(ctxmod.repos, "release_download", release)
+    return release
 
 
 def test_sources_default_is_spotify_only(make_settings: Callable[..., Settings]) -> None:
@@ -108,6 +115,7 @@ async def test_download_liked_track_lands_in_genre_subdir(
     monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=track))
     mark = AsyncMock()
     monkeypatch.setattr(ctxmod.repos, "mark_track_downloaded", mark)
+    _stub_claim(monkeypatch)
 
     path = await ctx.download_liked_track(7, source="spotify")
 
@@ -159,6 +167,7 @@ async def test_download_liked_track_searches_non_spotify_sources(
     )
     monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=track))
     monkeypatch.setattr(ctxmod.repos, "mark_track_downloaded", AsyncMock())
+    _stub_claim(monkeypatch)
 
     await ctx.download_liked_track(7, source="soulseek")
 
@@ -180,9 +189,11 @@ async def test_download_liked_track_no_match(
         "get_track_by_id",
         AsyncMock(return_value=LikedTrack(id=7, spotify_track_id="t1", artist_name="ROD")),
     )
+    release = _stub_claim(monkeypatch)
 
     with pytest.raises(SourceError, match="No soulseek match"):
         await ctx.download_liked_track(7, source="soulseek")
+    release.assert_awaited_once()  # claim freed so the track stays retryable
 
 
 @pytest.mark.asyncio
@@ -200,37 +211,14 @@ async def test_download_liked_track_rejects_already_downloaded(
 
 
 @pytest.mark.asyncio
-async def test_download_liked_track_is_single_flight(
-    make_settings: Callable[..., Settings],
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+async def test_download_liked_track_refused_when_claim_lost(
+    make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The second concurrent call must be refused, and the slot must free up."""
-    ctx = AppContext(make_settings(download_dir=str(tmp_path)))
-    slow = FakeSource()
-    gate = asyncio.Event()
-
-    async def slow_download(result: SearchResult, dest_dir: Path) -> Path:
-        await gate.wait()
-        return dest_dir / "done.mp3"
-
-    slow.download = slow_download  # type: ignore[method-assign]
-    ctx.sources["spotify"] = slow
-    ctx.library = MagicMock()
-
+    """Losing the DB claim means another process (or click) is already on it."""
+    ctx = AppContext(make_settings())
     track = LikedTrack(id=7, spotify_track_id="t1", track_name="A", liked_by="karma")
     monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=track))
-    monkeypatch.setattr(ctxmod.repos, "mark_track_downloaded", AsyncMock())
-
-    first = asyncio.create_task(ctx.download_liked_track(7))
-    await asyncio.sleep(0.01)  # let it claim the slot and block on the gate
+    _stub_claim(monkeypatch, claimed=False)
 
     with pytest.raises(SourceError, match="already being downloaded"):
-        await ctx.download_liked_track(7)
-
-    gate.set()
-    await first
-    # Slot released: a new call gets past the guard (fails later on re-check).
-    with pytest.raises(SourceError, match="not found"):
-        monkeypatch.setattr(ctxmod.repos, "get_track_by_id", AsyncMock(return_value=None))
         await ctx.download_liked_track(7)

@@ -307,3 +307,50 @@ async def test_get_last_liked_at_max_per_user(db_session: AsyncSession) -> None:
     )
 
     assert await repos.get_last_liked_at(db_session, "karma") == datetime(2026, 7, 2, 12, 0)
+
+
+# ---- download claim (cross-process single-flight) --------------------------
+
+
+async def test_claim_download_is_exclusive(db_session: AsyncSession) -> None:
+    """The second claim loses: the UPDATE is conditional and the DB serializes it."""
+    track = await repos.insert_liked_track(db_session, _track())
+
+    assert await repos.claim_download(db_session, track.id, stale_after_sec=600) is True
+    assert await repos.claim_download(db_session, track.id, stale_after_sec=600) is False
+
+
+async def test_release_download_allows_retry(db_session: AsyncSession) -> None:
+    track = await repos.insert_liked_track(db_session, _track())
+    await repos.claim_download(db_session, track.id, stale_after_sec=600)
+
+    await repos.release_download(db_session, track.id)
+
+    assert await repos.claim_download(db_session, track.id, stale_after_sec=600) is True
+
+
+async def test_stale_claim_is_taken_over(db_session: AsyncSession) -> None:
+    """A process that died mid-download must not block the track forever."""
+    track = await repos.insert_liked_track(db_session, _track())
+    await repos.claim_download(db_session, track.id, stale_after_sec=600)
+
+    # Same call with a zero-length staleness window: the claim is already old.
+    assert await repos.claim_download(db_session, track.id, stale_after_sec=0) is True
+
+
+async def test_downloaded_track_cannot_be_claimed(db_session: AsyncSession) -> None:
+    track = await repos.insert_liked_track(db_session, _track())
+    await repos.mark_track_downloaded(db_session, track.id, "a.mp3")
+
+    assert await repos.claim_download(db_session, track.id, stale_after_sec=600) is False
+
+
+async def test_mark_downloaded_clears_the_claim(db_session: AsyncSession) -> None:
+    track = await repos.insert_liked_track(db_session, _track())
+    await repos.claim_download(db_session, track.id, stale_after_sec=600)
+
+    await repos.mark_track_downloaded(db_session, track.id, "a.mp3")
+
+    await db_session.refresh(track)
+    assert track.download_started_at is None
+    assert track.downloaded_at is not None

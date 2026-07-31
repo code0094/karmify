@@ -41,9 +41,6 @@ router = Router()
 # so an unreferenced one can be garbage-collected mid-download.
 _background_tasks: set[asyncio.Task[None]] = set()
 
-# Track ids with a download in flight (mirrors AppContext's single-flight guard).
-_downloading: set[int] = set()
-
 
 def _spawn(coro: Coroutine[Any, Any, None]) -> None:
     """Run a coroutine in the background, keeping a strong reference to it."""
@@ -228,21 +225,26 @@ def setup_callback_router(
             return
         # The button stays live for the whole download (minutes), so a second
         # press is routine, not a millisecond race — and two zotify runs would
-        # share one scratch directory and hit the burner account twice.
-        if track_db_id in _downloading:
+        # share one scratch directory and hit the burner account twice. The
+        # claim lives in the database because the sidecar is another process
+        # that can be downloading this very track.
+        async with session_factory() as session:
+            claimed = await repos.claim_download(
+                session, track_db_id, stale_after_sec=settings.download_timeout_sec * 2
+            )
+        if not claimed:
             await callback.answer("Уже скачивается…", show_alert=True)
             return
-        _downloading.add(track_db_id)
 
         # Downloading takes far longer than Telegram's ~15s callback window, so
         # ack immediately and run the actual download in a background task. The
-        # ack itself can fail (stale callback query, flood control) — without
-        # this guard the slot would never be released and the track could never
-        # be downloaded again, since only _run_download's finally clears it.
+        # ack itself can fail (stale callback query, flood control) — release
+        # the claim then, or the track could never be downloaded again.
         try:
             await callback.answer("⏳ Скачиваю, это займёт время…")
         except Exception:
-            _downloading.discard(track_db_id)
+            async with session_factory() as session:
+                await repos.release_download(session, track_db_id)
             raise
         _spawn(_run_download(callback, track_db_id, track.spotify_track_id))
 
@@ -252,7 +254,10 @@ def setup_callback_router(
         try:
             await _download_and_deliver(callback, track_db_id, spotify_track_id)
         finally:
-            _downloading.discard(track_db_id)
+            # mark_track_downloaded clears the claim on success; this covers
+            # every failure path so the track stays retryable.
+            async with session_factory() as session:
+                await repos.release_download(session, track_db_id)
 
     async def _download_and_deliver(
         callback: CallbackQuery, track_db_id: int, spotify_track_id: str

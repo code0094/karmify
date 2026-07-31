@@ -57,6 +57,9 @@ class LikedTrack(Base):
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     download_path: Mapped[str | None] = mapped_column(String(1000))
+    #: Set while a download is in flight — the cross-process single-flight claim
+    #: (the bot and the sidecar are separate processes on one database).
+    download_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -55,9 +55,9 @@ class AppContext:
         self.downloader = TrackDownloader(settings)
         self.library = LibraryManager(settings.library_dir)
         self.sources = self._build_sources()
-        # Downloads in flight — a second click must not start a parallel fetch
-        # of the same track (by liked-track id) or search result (by ref).
-        self._downloading: set[int] = set()
+        # Ad-hoc search-result downloads in flight, keyed by ref. Liked tracks
+        # use a database claim instead (see repos.claim_download) because the
+        # bot process must see it too.
         self._downloading_refs: set[str] = set()
 
     def _build_sources(self) -> dict[str, MusicSource]:
@@ -112,20 +112,23 @@ class AppContext:
 
     async def download_liked_track(self, track_id: int, *, source: str = "spotify") -> Path:
         """Download a liked track's audio, copy to library, mark it downloaded."""
-        # Claim the slot before the first await: with a check-then-add split by
-        # awaits, two concurrent clicks both pass the check and download twice.
-        # Held until the DB write so the whole operation is single-flight.
-        if track_id in self._downloading:
-            raise SourceError(f"Track {track_id} is already being downloaded")
-        self._downloading.add(track_id)
-        try:
-            async with self.session_factory() as session:
-                track = await repos.get_track_by_id(session, track_id)
-            if track is None:
-                raise SourceError(f"Track {track_id} not found")
-            if track.downloaded_at:
-                raise SourceError(f"Track {track_id} is already downloaded")
+        async with self.session_factory() as session:
+            track = await repos.get_track_by_id(session, track_id)
+        if track is None:
+            raise SourceError(f"Track {track_id} not found")
+        if track.downloaded_at:
+            raise SourceError(f"Track {track_id} is already downloaded")
 
+        # The claim lives in the database: the bot is a separate process, so an
+        # in-memory guard would not see a download it started for this track.
+        async with self.session_factory() as session:
+            claimed = await repos.claim_download(
+                session, track_id, stale_after_sec=self.settings.download_timeout_sec * 2
+            )
+        if not claimed:
+            raise SourceError(f"Track {track_id} is already being downloaded")
+
+        try:
             src = self._require_source(source)
             result = await self._resolve_candidate(src, source, track)
 
@@ -144,8 +147,12 @@ class AppContext:
 
             async with self.session_factory() as session:
                 await repos.mark_track_downloaded(session, track_id, str(path))
-        finally:
-            self._downloading.discard(track_id)
+        except BaseException:
+            # Release the claim so a retry is possible (mark_track_downloaded
+            # clears it on the success path).
+            async with self.session_factory() as session:
+                await repos.release_download(session, track_id)
+            raise
         return path
 
     async def _resolve_candidate(

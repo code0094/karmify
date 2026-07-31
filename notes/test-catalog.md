@@ -8,6 +8,8 @@
 Запуск: `.venv/Scripts/python -m pytest -q` (Windows) / `pytest -q`.
 Полный гейт качества: `pytest -q` + `ruff check .` + `ruff format --check .` +
 `mypy src` (strict, держится на нуле ошибок).
+Схема БД версионируется alembic (`alembic upgrade head`; на БД, где таблицы
+создавались вручную — сперва `alembic stamp 0001`).
 Тестовая БД — in-memory SQLite (aiosqlite, dev-зависимость): проверяет логику
 запросов, НЕ Postgres-специфику (FOR UPDATE no-op, naive datetime,
 NULL-ordering отличается — см. флаги в docstring tests/test_repos.py).
@@ -18,7 +20,7 @@ NULL-ordering отличается — см. флаги в docstring tests/test_
 | AppContext (`src/sidecar/context.py`) | `test_context.py` | реестр источников по конфигу (в т.ч. частичный slskd-конфиг), download в жанровый subdir, download_result, unknown source, поиск для не-Spotify источников, отказ уже скачанному, single-flight | ревью 8/10 |
 | TrackDownloader / zotify (`src/spotify/downloader.py`) | `test_downloader.py` | успех/перезапись/креды-флаг, rc≠0, нет файла, нет zotify, таймаут+kill, _find_audio | ревью 9/10 |
 | SpotifyClient токены (`src/spotify/client.py`) | `test_spotify_client.py` | reuse живого, refresh истёкшего, ротация refresh-токена persist, fallback на settings, unknown label | ревью 8/10 |
-| Репозитории (`src/db/repos.py`) | `test_repos.py` | все 15 функций; пины: no-op update_tokens, assigned_at при снятии, затирание telegram_message_id, пустые фильтры | ревью 9/10 |
+| Репозитории (`src/db/repos.py`) | `test_repos.py` | все функции; пины: no-op update_tokens, assigned_at при снятии, затирание telegram_message_id, пустые фильтры; claim/release скачивания (эксклюзивность, перехват протухшего, очистка при отметке) | ревью 9/10 |
 | Sidecar HTTP (`src/sidecar/app.py`) | `test_sidecar.py` | health/fetch/tracks(+passthrough, границы limit)/playlists/assign(404/400/happy/дубль/перенос)/downloads/lifespan/origin-guard/токен (401, подделка `null`, query только для audio, открытый `/health`)/preflight в обоих режимах/audio-эндпоинт (200/404)/host-guard (DNS rebinding) | ревью 9/10 |
 | Плейлисты Spotify (`src/spotify/playlist.py`) | `test_playlist.py` | пагинация дедупа, терминация, add/remove, `move_track` (remove до add) | ревью 9/10; мутации 25/0 |
 | Жанровый каскад (`src/genre/*`) | `test_genre_resolver.py`, `test_genre_lookups.py`, `test_mapper.py` | маршрутизация уровней 1–3/manual, label once, квирк raw[0], батч sp.artists, genres→styles, строковые веса, приоритет маппера, единый Discogs-запрос | ревью 9/10; мутации 95/0 |
@@ -64,22 +66,17 @@ NULL-ordering отличается — см. флаги в docstring tests/test_
   Spotify-id без `extra` → пустые username/filename. Теперь не-Spotify
   источники ищутся через `search()` (`test_context.py::
   test_download_liked_track_searches_non_spotify_sources`).
+- Двойное скачивание одного трека из разных процессов (бот и сайдкар держали
+  guard в своей памяти): claim перенесён в БД — `download_started_at` +
+  условный UPDATE (`test_repos.py::test_claim_download_is_exclusive` и
+  соседние; протухший claim перехватывается, чтобы упавший процесс не
+  блокировал трек навсегда).
 
 ## Открытые баги (НЕ закреплены тестами — требуют решения)
 
 - Бот не проверяет chat_id/user_id: любой, кто напишет боту, может дёрнуть
   `/fetch`, назначение и скачивание. Возможно, осознанно для приватного бота —
   требует решения владельца.
-- **Single-flight скачивания не переживает межпроцессное развёртывание.**
-  Guard'ы живут в памяти процесса: `AppContext._downloading` (сайдкар) и
-  `callbacks._downloading` (бот). При штатной схеме «бот в контейнере +
-  сайдкар отдельно» нажатие ⬇️ в Telegram и клик «Скачать» в приложении по
-  одному треку пройдут проверку `downloaded_at IS NULL` независимо и запустят
-  zotify дважды (риск для burner-аккаунта, общий scratch-каталог).
-  Фикс требует атомарного claim в БД (колонка `download_started_at` +
-  UPDATE ... WHERE download_started_at IS NULL), то есть изменения схемы —
-  а механизма миграций в проекте нет (alembic пуст, таблицы на VPS созданы
-  вручную). Делать вместе с задачей про схему/миграции; решение за владельцем.
 - Сайдкар без `SIDECAR_AUTH_TOKEN` доверяет origin `null` (иначе не работает
   упакованный рендерер на `file://`), а его же присылает sandboxed-iframe с
   любого сайта. Electron-приложение токен генерирует само; для standalone-

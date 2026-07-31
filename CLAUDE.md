@@ -345,9 +345,10 @@ pytest -v --cov=src/genre --cov=src/spotify
 # Lint
 ruff check --fix . && ruff format .
 
-# DB migrations
+# DB migrations (alembic; DATABASE_URL is read from .env by alembic/env.py)
+alembic upgrade head                    # fresh database: creates everything
+alembic stamp 0001 && alembic upgrade head   # DB whose tables were made by hand (the VPS)
 alembic revision --autogenerate -m "description"
-alembic upgrade head
 
 # Docker
 docker-compose up -d --build

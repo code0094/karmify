@@ -1,8 +1,9 @@
 """Repository-pattern database queries."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import GenreAlias, GenrePlaylist, LikedTrack, SpotifyAccount
@@ -136,12 +137,48 @@ async def get_track_for_update(session: AsyncSession, track_id: int) -> LikedTra
     return result.scalar_one_or_none()
 
 
+async def claim_download(session: AsyncSession, track_id: int, *, stale_after_sec: int) -> bool:
+    """Try to claim a track for downloading; True if this caller won the race.
+
+    One conditional UPDATE, serialized by the database, so the bot and the
+    sidecar (separate processes) cannot both start a download for one track.
+    A claim older than ``stale_after_sec`` is taken over — otherwise a process
+    that died mid-download would block the track forever.
+    """
+    now = datetime.now().astimezone()
+    cutoff = now - timedelta(seconds=stale_after_sec)
+    stmt = (
+        update(LikedTrack)
+        .where(
+            LikedTrack.id == track_id,
+            LikedTrack.downloaded_at.is_(None),
+            (LikedTrack.download_started_at.is_(None)) | (LikedTrack.download_started_at < cutoff),
+        )
+        .values(download_started_at=now)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    # UPDATE always yields a CursorResult; Result is just the declared type.
+    return bool(cast("CursorResult[Any]", result).rowcount)
+
+
+async def release_download(session: AsyncSession, track_id: int) -> None:
+    """Drop a download claim (failed attempt); the track can be retried."""
+    stmt = update(LikedTrack).where(LikedTrack.id == track_id).values(download_started_at=None)
+    await session.execute(stmt)
+    await session.commit()
+
+
 async def mark_track_downloaded(session: AsyncSession, track_id: int, download_path: str) -> None:
     """Record that a track's audio has been downloaded to a local path."""
     stmt = (
         update(LikedTrack)
         .where(LikedTrack.id == track_id)
-        .values(downloaded_at=datetime.now().astimezone(), download_path=download_path)
+        .values(
+            downloaded_at=datetime.now().astimezone(),
+            download_path=download_path,
+            download_started_at=None,
+        )
     )
     await session.execute(stmt)
     await session.commit()
