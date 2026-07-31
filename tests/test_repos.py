@@ -439,3 +439,30 @@ async def test_playlist_download_stats_counts_states(db_session: AsyncSession) -
 
 async def test_playlist_download_stats_empty_db(db_session: AsyncSession) -> None:
     assert await repos.playlist_download_stats(db_session) == {}
+
+
+# ---- default playlists / aliases seeding -----------------------------------
+
+
+async def test_add_genre_playlist_persists(db_session: AsyncSession) -> None:
+    row = await repos.add_genre_playlist(
+        db_session,
+        genre_key="hardgroove",
+        playlist_id="pl_hg",
+        display_name="Hardgroove",
+        emoji="🔊",
+    )
+
+    assert row.id is not None
+    found = await repos.get_playlist_by_genre_key(db_session, "hardgroove")
+    assert found is not None
+    assert found.playlist_id == "pl_hg"
+
+
+async def test_add_genre_alias_is_idempotent_and_normalized(db_session: AsyncSession) -> None:
+    assert await repos.add_genre_alias(db_session, alias="Dark Techno", genre_key="hardgroove")
+    # Same alias in different case must not raise on the unique constraint.
+    assert not await repos.add_genre_alias(db_session, alias="dark techno", genre_key="hardgroove")
+
+    # The mapper lowercases its input — the stored alias must match it.
+    assert await repos.find_genre_key(db_session, "DARK TECHNO") == "hardgroove"

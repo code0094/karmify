@@ -20,6 +20,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from src.db import repos
 from src.sources.base import DownloadInFlightError, SearchResult, SourceError
 from src.spotify import playlist as spotify_playlist
+from src.spotify.client import NotAuthorizedError
 from src.spotify.oauth import OAuthError
 
 if TYPE_CHECKING:
@@ -275,6 +276,14 @@ def create_app(context: AppContext) -> FastAPI:
                 )
             )
         return out
+
+    @app.post("/playlists/init")
+    async def init_playlists(ctx: AppContext = Depends(get_context)) -> dict[str, int]:
+        """Create the default genre playlists and mapper aliases (idempotent)."""
+        try:
+            return await ctx.init_default_playlists()
+        except NotAuthorizedError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/playlists/{playlist_db_id}/download", status_code=202)
     async def download_playlist(

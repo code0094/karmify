@@ -19,6 +19,7 @@ import structlog
 from src.db import repos
 from src.db.engine import build_engine
 from src.db.models import LikedTrack
+from src.genre.defaults import DEFAULT_ALIASES, DEFAULT_PLAYLISTS
 from src.genre.pipeline import resolve_and_store_genre
 from src.library.manager import LibraryManager
 from src.sources.base import (
@@ -29,6 +30,7 @@ from src.sources.base import (
     SourceError,
 )
 from src.sources.spotify_source import SpotifySource
+from src.spotify import playlist as spotify_playlist
 from src.spotify.client import SpotifyClient
 from src.spotify.downloader import TrackDownloader
 from src.spotify.oauth import SpotifyAuthFlow
@@ -212,6 +214,37 @@ class AppContext:
             raise SourceError(f"No {source} match for {query!r}")
         # Sources rank their own results (Soulseek puts lossless first).
         return candidates[0]
+
+    async def init_default_playlists(self) -> dict[str, int]:
+        """Create the standard genre playlists on Spotify and seed the mapper.
+
+        Idempotent: existing genres are skipped, aliases are added only when
+        missing. Spotify auth is required lazily — a re-run with everything
+        already in place needs no connection at all.
+        """
+        sp = None
+        created = skipped = 0
+        async with self.session_factory() as session:
+            for genre_key, display_name, emoji in DEFAULT_PLAYLISTS:
+                if await repos.get_playlist_by_genre_key(session, genre_key) is not None:
+                    skipped += 1
+                    continue
+                if sp is None:
+                    sp = await self.spotify_clients["karma"].get_client()
+                playlist_id = await spotify_playlist.create_playlist(sp, display_name)
+                await repos.add_genre_playlist(
+                    session,
+                    genre_key=genre_key,
+                    playlist_id=playlist_id,
+                    display_name=display_name,
+                    emoji=emoji,
+                )
+                created += 1
+            for genre_key, aliases in DEFAULT_ALIASES.items():
+                for alias in aliases:
+                    await repos.add_genre_alias(session, alias=alias, genre_key=genre_key)
+        logger.info("playlists.init", created=created, skipped=skipped)
+        return {"created": created, "skipped": skipped}
 
     def playlist_download_running(self, playlist_db_id: int) -> bool:
         """Whether a batch download for this playlist is still in flight."""

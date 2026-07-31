@@ -130,6 +130,38 @@ async def get_all_playlists(session: AsyncSession) -> list[GenrePlaylist]:
     return list(result.scalars().all())
 
 
+async def add_genre_playlist(
+    session: AsyncSession,
+    *,
+    genre_key: str,
+    playlist_id: str,
+    display_name: str,
+    emoji: str,
+) -> GenrePlaylist:
+    """Register a genre playlist (created on Spotify beforehand)."""
+    row = GenrePlaylist(
+        genre_key=genre_key, playlist_id=playlist_id, display_name=display_name, emoji=emoji
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+async def add_genre_alias(session: AsyncSession, *, alias: str, genre_key: str) -> bool:
+    """Add a mapper alias unless present; True when created.
+
+    Stored lowercased — find_genre_key lowercases its input before matching.
+    """
+    normalized = alias.lower().strip()
+    existing = await session.execute(select(GenreAlias).where(GenreAlias.alias == normalized))
+    if existing.scalar_one_or_none() is not None:
+        return False
+    session.add(GenreAlias(alias=normalized, genre_key=genre_key))
+    await session.commit()
+    return True
+
+
 async def find_genre_key(session: AsyncSession, genre_string: str) -> str | None:
     """Look up genre_key by alias (normalized)."""
     normalized = genre_string.lower().strip()

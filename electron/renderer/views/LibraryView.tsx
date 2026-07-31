@@ -4,9 +4,11 @@ import type { Playlist, Track } from "../types";
 interface LibraryViewProps {
   playlists: Playlist[];
   tracks: Track[]; // only assigned ones
+  spotifyConnected: boolean;
   onPlay: (track: Track) => void;
   onAssign: (trackId: number, playlistDbId: number) => Promise<void>;
   onDownloadPlaylist: (playlistDbId: number) => Promise<void>;
+  onInitPlaylists: () => Promise<void>;
 }
 
 const LOSSLESS = new Set(["flac", "wav", "aiff", "aif", "alac"]);
@@ -45,20 +47,40 @@ function StatusCell({ track }: { track: Track }) {
 export function LibraryView({
   playlists,
   tracks,
+  spotifyConnected,
   onPlay,
   onAssign,
   onDownloadPlaylist,
+  onInitPlaylists,
 }: LibraryViewProps) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
 
   if (playlists.length === 0) {
     return (
       <div className="empty">
         <h3>Плейлистов пока нет</h3>
         <p>
-          Жанровые плейлисты создаются один раз скриптом <code>scripts/init_playlists.py</code> —
-          после этого здесь появится библиотека.
+          {spotifyConnected
+            ? "Создай стандартный набор жанров — Hardgroove, Rave Techno, Electro, Acid, Jungle. Плейлисты появятся и здесь, и в Spotify."
+            : "Сначала авторизуй Spotify — кнопка с аккаунтом вверху справа. Потом здесь появится кнопка создания жанровых плейлистов."}
         </p>
+        {spotifyConnected && (
+          <button
+            className="btn btn-accent"
+            disabled={creating}
+            onClick={async () => {
+              setCreating(true);
+              try {
+                await onInitPlaylists();
+              } finally {
+                setCreating(false);
+              }
+            }}
+          >
+            {creating ? "Создаю…" : "Создать плейлисты"}
+          </button>
+        )}
       </div>
     );
   }

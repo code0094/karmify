@@ -379,6 +379,81 @@ async def test_playlist_download_with_nothing_to_do(
     assert 3 not in ctx._playlist_tasks  # noqa: SLF001 — no idle task left behind
 
 
+# ---- default playlists init ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_init_default_playlists_creates_missing_and_seeds_aliases(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    db_session_factory: object,
+) -> None:
+    ctx = AppContext(make_settings())
+    ctx.session_factory = db_session_factory  # type: ignore[assignment] — real SQLite
+    sp = object()
+    client = MagicMock()
+    client.get_client = AsyncMock(return_value=sp)
+    ctx.spotify_clients = {"karma": client}
+    create = AsyncMock(side_effect=lambda _sp, name: f"pl_{name.lower()}")
+    monkeypatch.setattr(ctxmod.spotify_playlist, "create_playlist", create)
+
+    result = await ctx.init_default_playlists()
+
+    assert result["created"] == len(ctxmod.DEFAULT_PLAYLISTS)
+    assert result["skipped"] == 0
+    async with ctx.session_factory() as session:  # type: ignore[operator]
+        playlists = await ctxmod.repos.get_all_playlists(session)
+        assert {p.genre_key for p in playlists} == {k for k, _, _ in ctxmod.DEFAULT_PLAYLISTS}
+        # The mapper must resolve a documented alias right after init.
+        assert await ctxmod.repos.find_genre_key(session, "dark techno") == "hardgroove"
+
+
+@pytest.mark.asyncio
+async def test_init_default_playlists_is_idempotent(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    db_session_factory: object,
+) -> None:
+    """A second run creates nothing — and needs no Spotify auth at all."""
+    ctx = AppContext(make_settings())
+    ctx.session_factory = db_session_factory  # type: ignore[assignment]
+    client = MagicMock()
+    client.get_client = AsyncMock(return_value=object())
+    ctx.spotify_clients = {"karma": client}
+    create = AsyncMock(side_effect=lambda _sp, name: f"pl_{name.lower()}")
+    monkeypatch.setattr(ctxmod.spotify_playlist, "create_playlist", create)
+
+    await ctx.init_default_playlists()
+    client.get_client = AsyncMock(side_effect=AssertionError("must not need Spotify"))
+
+    result = await ctx.init_default_playlists()
+
+    assert result["created"] == 0
+    assert result["skipped"] == len(ctxmod.DEFAULT_PLAYLISTS)
+
+
+@pytest.mark.asyncio
+async def test_init_default_playlists_requires_auth_only_when_creating(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    db_session_factory: object,
+) -> None:
+    from src.spotify.client import NotAuthorizedError
+
+    ctx = AppContext(make_settings())
+    ctx.session_factory = db_session_factory  # type: ignore[assignment]
+    client = MagicMock()
+    client.get_client = AsyncMock(side_effect=NotAuthorizedError("karma is not connected"))
+    ctx.spotify_clients = {"karma": client}
+
+    with pytest.raises(NotAuthorizedError):
+        await ctx.init_default_playlists()
+
+    # Nothing half-created before the auth failure surfaced.
+    async with ctx.session_factory() as session:  # type: ignore[operator]
+        assert await ctxmod.repos.get_all_playlists(session) == []
+
+
 @pytest.mark.asyncio
 async def test_aclose_cancels_running_playlist_downloads(
     make_settings: Callable[..., Settings], monkeypatch: pytest.MonkeyPatch

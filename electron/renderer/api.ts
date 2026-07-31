@@ -72,6 +72,9 @@ export const api = {
   downloadPlaylist(playlistDbId: number): Promise<{ queued: number }> {
     return request("POST", `/playlists/${playlistDbId}/download`);
   },
+  initPlaylists(): Promise<{ created: number; skipped: number }> {
+    return request("POST", "/playlists/init");
+  },
   search(query: string, source = "spotify", limit = 20): Promise<SearchResult[]> {
     return request("POST", "/sources/search", { query, source, limit });
   },

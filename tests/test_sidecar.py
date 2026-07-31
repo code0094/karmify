@@ -344,6 +344,32 @@ def test_download_playlist_already_running_409(monkeypatch: pytest.MonkeyPatch) 
     assert r.status_code == 409
 
 
+def test_init_playlists_reports_counts() -> None:
+    ctx = _make_ctx()
+    ctx.init_default_playlists = AsyncMock(return_value={"created": 5, "skipped": 0})
+
+    with _client(ctx) as c:
+        r = c.post("/playlists/init")
+
+    assert r.status_code == 200
+    assert r.json() == {"created": 5, "skipped": 0}
+
+
+def test_init_playlists_maps_missing_auth_to_400() -> None:
+    from src.spotify.client import NotAuthorizedError
+
+    ctx = _make_ctx()
+    ctx.init_default_playlists = AsyncMock(
+        side_effect=NotAuthorizedError("Spotify account 'karma' is not connected")
+    )
+
+    with _client(ctx) as c:
+        r = c.post("/playlists/init")
+
+    assert r.status_code == 400
+    assert "not connected" in r.json()["detail"]
+
+
 def test_tracks_expose_download_progress_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     """The renderer derives ⏳/❌ badges from these two fields."""
     ctx = _make_ctx()

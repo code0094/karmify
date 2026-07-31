@@ -88,6 +88,19 @@ export function App() {
     }
   }
 
+  async function onInitPlaylists() {
+    try {
+      const r = await api.initPlaylists();
+      await reload();
+      push(
+        "success",
+        r.created > 0 ? `Создано плейлистов: ${r.created}` : "Все плейлисты уже на месте",
+      );
+    } catch (err) {
+      push("error", `Не получилось создать плейлисты: ${String(err)}`);
+    }
+  }
+
   async function onDownloadPlaylist(playlistDbId: number) {
     try {
       const r = await api.downloadPlaylist(playlistDbId);
@@ -174,9 +187,11 @@ export function App() {
           <LibraryView
             playlists={playlists}
             tracks={assigned}
+            spotifyConnected={Object.values(accounts).some(Boolean)}
             onPlay={onPlay}
             onAssign={onAssign}
             onDownloadPlaylist={onDownloadPlaylist}
+            onInitPlaylists={onInitPlaylists}
           />
         )}
         {view === "search" && <SearchView sources={sources} push={push} />}

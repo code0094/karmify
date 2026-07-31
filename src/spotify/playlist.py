@@ -8,6 +8,14 @@ import structlog
 logger = structlog.get_logger()
 
 
+async def create_playlist(sp: spotipy.Spotify, name: str) -> str:
+    """Create a private playlist on the account and return its Spotify id."""
+    me = await asyncio.to_thread(sp.me)
+    playlist = await asyncio.to_thread(sp.user_playlist_create, me["id"], name, public=False)
+    logger.info("playlist.created", name=name, id=playlist["id"])
+    return str(playlist["id"])
+
+
 async def track_in_playlist(sp: spotipy.Spotify, playlist_id: str, track_id: str) -> bool:
     """Check if a track is already in a Spotify playlist."""
     offset = 0
