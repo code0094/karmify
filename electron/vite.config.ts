@@ -11,6 +11,10 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // Bind IPv4 explicitly: "localhost" alone leaves Vite on [::1], while
+    // Electron and Node resolve localhost to 127.0.0.1 and get refused.
+    host: "127.0.0.1",
     port: 5173,
+    strictPort: true,
   },
 });

@@ -21,6 +21,12 @@ let sidecar = null;
 let win = null;
 
 function startSidecar() {
+  // The sidecar can live elsewhere (a server reached over an SSH tunnel), in
+  // which case spawning a local one would just fight over the port.
+  if (process.env.AUX_SIDECAR_EXTERNAL === "1") {
+    console.log(`[sidecar] using external instance at ${SIDECAR_URL}`);
+    return;
+  }
   // Reuse the project's Python; override with AUX_PYTHON (e.g. a venv path).
   const python = process.env.AUX_PYTHON || "python";
   sidecar = spawn(python, ["-m", "src.sidecar.app"], {
@@ -47,21 +53,24 @@ function startSidecar() {
   });
 }
 
-function waitForSidecar(retries = 60) {
+function waitForUrl(url, what, retries = 60) {
   return new Promise((resolve, reject) => {
     const attempt = (n) => {
-      const req = http.get(`${SIDECAR_URL}/health`, (res) => {
+      const req = http.get(url, (res) => {
         res.resume();
         resolve();
       });
       req.on("error", () => {
-        if (n <= 0) reject(new Error("sidecar did not become healthy"));
+        if (n <= 0) reject(new Error(`${what} did not become reachable`));
         else setTimeout(() => attempt(n - 1), 500);
       });
     };
     attempt(retries);
   });
 }
+
+const waitForSidecar = (retries = 60) =>
+  waitForUrl(`${SIDECAR_URL}/health`, "sidecar", retries);
 
 async function createWindow() {
   win = new BrowserWindow({
@@ -76,6 +85,11 @@ async function createWindow() {
 
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl) {
+    // `npm run dev` starts Vite and Electron together; without this the window
+    // races the dev server and loads a blank page.
+    await waitForUrl(devUrl, "vite dev server").catch((err) =>
+      console.error(`[main] ${err.message}`),
+    );
     await win.loadURL(devUrl);
   } else {
     await win.loadFile(path.join(__dirname, "dist", "index.html"));

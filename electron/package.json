@@ -7,7 +7,7 @@
   "scripts": {
     "dev:renderer": "vite",
     "build:renderer": "vite build",
-    "dev": "concurrently \"vite\" \"cross-env ELECTRON_RENDERER_URL=http://localhost:5173 electron .\"",
+    "dev": "concurrently \"vite\" \"cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
     "start": "npm run build:renderer && electron ."
   },
   "devDependencies": {
