@@ -94,7 +94,9 @@ class SoulseekSource(MusicSource):
                 break
             time.sleep(1.0)
 
-        responses = client.searches.search_responses(search_id)
+        # The dedicated responses endpoint comes back empty against slskd 0.26 —
+        # the answers live on the search state itself.
+        responses = client.searches.state(search_id, includeResponses=True).get("responses") or []
         results: list[SearchResult] = []
         for resp in responses:
             username = resp.get("username", "")

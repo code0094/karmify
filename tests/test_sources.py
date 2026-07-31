@@ -77,17 +77,21 @@ async def test_soulseek_search_filters_and_sorts(monkeypatch: pytest.MonkeyPatch
 
     fake = MagicMock()
     fake.searches.search_text.return_value = {"id": "s1"}
-    fake.searches.state.return_value = {"isComplete": True}
-    fake.searches.search_responses.return_value = [
-        {
-            "username": "u",
-            "files": [
-                {"filename": "a\\song.mp3", "size": 500, "bitRate": 320, "length": 300},
-                {"filename": "a\\song.flac", "size": 30000, "bitRate": 900, "length": 300},
-                {"filename": "a\\readme.txt", "size": 10},
-            ],
-        }
-    ]
+    # slskd puts the answers on the search state; search_responses comes back
+    # empty against a live daemon, which no mock of it would ever reveal.
+    fake.searches.state.return_value = {
+        "isComplete": True,
+        "responses": [
+            {
+                "username": "u",
+                "files": [
+                    {"filename": "a\\song.mp3", "size": 500, "bitRate": 320, "length": 300},
+                    {"filename": "a\\song.flac", "size": 30000, "bitRate": 900, "length": 300},
+                    {"filename": "a\\readme.txt", "size": 10},
+                ],
+            }
+        ],
+    }
     monkeypatch.setattr(src, "_client", lambda: fake)
 
     results = await src.search("song")
@@ -256,9 +260,7 @@ async def test_soulseek_search_stops_once_enough_answers_arrived(
     fake.searches.state.side_effect = [
         {"isComplete": False, "responseCount": 1},
         {"isComplete": False, "responseCount": 40},
-    ]
-    fake.searches.search_responses.return_value = [
-        {"username": "u", "files": [{"filename": r"a\song.flac", "size": 100}]}
+        {"responses": [{"username": "u", "files": [{"filename": r"a\song.flac", "size": 100}]}]},
     ]
     monkeypatch.setattr(src, "_client", lambda: fake)
     monkeypatch.setattr("time.sleep", lambda _s: None)
@@ -266,4 +268,4 @@ async def test_soulseek_search_stops_once_enough_answers_arrived(
     results = await src.search("daft punk", limit=5)
 
     assert results[0].audio_format == "flac"
-    assert fake.searches.state.call_count == 2  # stopped early, did not wait it out
+    assert fake.searches.state.call_count == 3  # 2 polls + the fetch, no waiting it out
