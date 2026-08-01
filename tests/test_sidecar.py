@@ -39,11 +39,40 @@ def _client(ctx: MagicMock):
     return TestClient(create_app(ctx), base_url="http://127.0.0.1")
 
 
-def test_health_lists_sources() -> None:
-    with _client(_make_ctx()) as c:
+def test_health_reports_per_source_state() -> None:
+    ctx = _make_ctx()
+    ctx.source_states = AsyncMock(
+        return_value=[
+            {"name": "soulseek", "up": True, "quality": "flac и выше"},
+            {"name": "spotify", "up": False, "quality": "mp3 320"},
+        ]
+    )
+
+    with _client(ctx) as c:
         r = c.get("/health")
+
     assert r.status_code == 200
-    assert set(r.json()["sources"]) == {"spotify", "soulseek"}
+    body = r.json()
+    assert body["status"] == "ok"
+    # Quality first, so the UI can render the fallback order without sorting.
+    assert body["sources"] == [
+        {"name": "soulseek", "up": True, "quality": "flac и выше"},
+        {"name": "spotify", "up": False, "quality": "mp3 320"},
+    ]
+
+
+def test_health_stays_up_when_a_source_check_hangs() -> None:
+    """The liveness probe must answer even while slskd is timing out."""
+    from src.sources.base import SourceError
+
+    ctx = _make_ctx()
+    ctx.source_states = AsyncMock(side_effect=SourceError("slskd unreachable"))
+
+    with _client(ctx) as c:
+        r = c.get("/health")
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "sources": []}
 
 
 def test_fetch_likes_returns_count() -> None:
@@ -116,7 +145,12 @@ def test_sources_search() -> None:
 # would silently leak between tests) — build a fresh object instead.
 _TRACK = LikedTrack(id=7, spotify_track_id="t1", track_name="Akephale", liked_by="karma")
 _PLAYLIST = GenrePlaylist(
-    id=3, genre_key="acid", playlist_id="pl_spotify_id", display_name="Acid", emoji="🧪"
+    id=3,
+    genre_key="acid",
+    playlist_id="pl_spotify_id",
+    display_name="Acid",
+    emoji="🧪",
+    hue="#3ecf6e",
 )
 
 
@@ -289,6 +323,7 @@ def test_list_playlists_includes_download_stats(monkeypatch: pytest.MonkeyPatch)
             "playlist_id": "pl_spotify_id",
             "display_name": "Acid",
             "emoji": "🧪",
+            "hue": "#3ecf6e",
             "total_tracks": 4,
             "downloaded": 2,
             "downloading": 1,
@@ -343,6 +378,56 @@ def test_download_playlist_already_running_409(monkeypatch: pytest.MonkeyPatch) 
     with _client(ctx) as c:
         r = c.post("/playlists/3/download")
     assert r.status_code == 409
+
+
+def test_create_playlist_returns_the_new_row() -> None:
+    """The ⋯ menu creates a genre that does not exist yet, in one gesture."""
+    from src.db.models import GenrePlaylist
+
+    ctx = _make_ctx()
+    created = GenrePlaylist(
+        id=9,
+        genre_key="hard techno",
+        playlist_id="pl_new",
+        display_name="Hard Techno",
+        emoji="🎵",
+        hue="#b06aff",
+        crew_id=1,
+    )
+    ctx.create_playlist = AsyncMock(return_value=created)
+
+    with _client(ctx) as c:
+        r = c.post("/playlists", json={"display_name": "Hard Techno"})
+
+    assert r.status_code == 201
+    body = r.json()
+    assert body["display_name"] == "Hard Techno"
+    assert body["hue"] == "#b06aff"
+    assert body["total_tracks"] == 0  # brand new: the progress fields start at zero
+    ctx.create_playlist.assert_awaited_once_with("Hard Techno")
+
+
+def test_create_playlist_rejects_a_blank_name() -> None:
+    ctx = _make_ctx()
+    ctx.create_playlist = AsyncMock()
+
+    with _client(ctx) as c:
+        r = c.post("/playlists", json={"display_name": "   "})
+
+    assert r.status_code == 422
+    ctx.create_playlist.assert_not_awaited()
+
+
+def test_create_playlist_maps_missing_auth_to_400() -> None:
+    from src.spotify.client import NotAuthorizedError
+
+    ctx = _make_ctx()
+    ctx.create_playlist = AsyncMock(side_effect=NotAuthorizedError("karma is not connected"))
+
+    with _client(ctx) as c:
+        r = c.post("/playlists", json={"display_name": "Hard Techno"})
+
+    assert r.status_code == 400
 
 
 def test_init_playlists_reports_counts() -> None:

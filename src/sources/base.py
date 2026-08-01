@@ -40,6 +40,9 @@ class MusicSource(ABC):
 
     #: Stable identifier, e.g. "spotify" | "soulseek" | "bandcamp".
     name: str
+    #: What audio quality this source delivers, in the user's words. Shown on
+    #: the search picker so nobody has to remember the ranking.
+    quality: str = ""
 
     @abstractmethod
     async def search(self, query: str, *, limit: int = 20) -> list[SearchResult]:
@@ -48,6 +51,15 @@ class MusicSource(ABC):
     @abstractmethod
     async def download(self, result: SearchResult, dest_dir: Path) -> Path:
         """Download ``result`` into ``dest_dir`` and return the resulting file path."""
+
+    async def healthy(self) -> bool:
+        """Whether the source can be used right now.
+
+        Configured-and-assumed-working by default; sources with a daemon or an
+        account behind them override this. A source silently going down is what
+        turns every later download into a worse format without anyone noticing.
+        """
+        return True
 
 
 class SourceError(Exception):

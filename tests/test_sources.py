@@ -10,6 +10,43 @@ from src.sources.soulseek_source import SoulseekSource
 from src.sources.spotify_source import SpotifySource
 
 
+def test_sources_declare_the_quality_they_deliver() -> None:
+    """The search UI shows this instead of making anyone remember the ranking."""
+    assert SoulseekSource("http://x", "k", "/dl").quality == "flac и выше"
+    assert SpotifySource(MagicMock(), MagicMock()).quality == "mp3 320"
+
+
+@pytest.mark.asyncio
+async def test_soulseek_health_follows_the_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If slskd dies every download silently degrades to mp3 — the UI must know."""
+    src = SoulseekSource("http://x", "key", "/dl")
+    alive = MagicMock()
+    monkeypatch.setattr(src, "_client", lambda: alive)
+    assert await src.healthy() is True
+
+    def boom() -> None:
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(src, "_client", boom)
+    assert await src.healthy() is False
+
+
+@pytest.mark.asyncio
+async def test_spotify_health_needs_a_connected_account() -> None:
+    """Spotify is only usable while the owner's OAuth actually works."""
+    from src.spotify.client import NotAuthorizedError
+
+    async def no_auth() -> MagicMock:
+        raise NotAuthorizedError("not connected")
+
+    assert await SpotifySource(MagicMock(), no_auth).healthy() is False
+
+    async def ok() -> MagicMock:
+        return MagicMock()
+
+    assert await SpotifySource(MagicMock(), ok).healthy() is True
+
+
 def test_search_result_is_lossless() -> None:
     flac = SearchResult(source="s", title="t", artist="a", download_ref="r", audio_format="flac")
     mp3 = SearchResult(source="s", title="t", artist="a", download_ref="r", audio_format="mp3")

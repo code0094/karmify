@@ -19,7 +19,7 @@ import structlog
 from src.db import repos
 from src.db.bootstrap import ensure_default_crew
 from src.db.engine import build_engine
-from src.db.models import LikedTrack
+from src.db.models import GenrePlaylist, LikedTrack
 from src.genre.defaults import DEFAULT_ALIASES, DEFAULT_PLAYLISTS
 from src.genre.pipeline import resolve_and_store_genre
 from src.library.manager import LibraryManager
@@ -45,6 +45,19 @@ logger = structlog.get_logger()
 #: Batch downloads try sources in this order: lossless-capable first, the
 #: Spotify 320 kbps ceiling as the last resort. Unconfigured sources are skipped.
 SOURCE_PREFERENCE: tuple[str, ...] = ("soulseek", "bandcamp", "spotify")
+
+#: Colours identifying playlists across the UI, handed out round-robin on
+#: creation and then persisted. The first five match the seeded genres.
+PLAYLIST_HUES: tuple[str, ...] = (
+    "#ff6a3d",  # hardgroove — the crew's home genre reuses the brand flame
+    "#e8c14a",  # rave
+    "#4ba3ff",  # electro
+    "#3ecf6e",  # acid
+    "#b06aff",  # jungle
+    "#ff5c8a",
+    "#38d6c4",
+    "#9b8cff",
+)
 
 
 class AppContext:
@@ -253,7 +266,7 @@ class AppContext:
         sp = None
         created = skipped = 0
         async with self.session_factory() as session:
-            for genre_key, display_name, emoji in DEFAULT_PLAYLISTS:
+            for index, (genre_key, display_name, emoji) in enumerate(DEFAULT_PLAYLISTS):
                 if await repos.get_playlist_by_genre_key(session, genre_key) is not None:
                     skipped += 1
                     continue
@@ -267,6 +280,7 @@ class AppContext:
                     display_name=display_name,
                     emoji=emoji,
                     crew_id=self.default_crew_id,
+                    hue=PLAYLIST_HUES[index % len(PLAYLIST_HUES)],
                 )
                 created += 1
             for genre_key, aliases in DEFAULT_ALIASES.items():
@@ -274,6 +288,60 @@ class AppContext:
                     await repos.add_genre_alias(session, alias=alias, genre_key=genre_key)
         logger.info("playlists.init", created=created, skipped=skipped)
         return {"created": created, "skipped": skipped}
+
+    async def create_playlist(self, display_name: str) -> GenrePlaylist:
+        """Create one genre playlist on Spotify and register it for the crew.
+
+        This is how a genre that the seeded set never anticipated comes into
+        existence — the app files a track into it in the same gesture, so the
+        display name doubles as the first mapper alias.
+        """
+        genre_key = display_name.lower().strip()
+        async with self.session_factory() as session:
+            if await repos.get_playlist_by_genre_key(session, genre_key) is not None:
+                raise SourceError(f"Плейлист «{display_name}» уже есть")
+            existing = await repos.get_all_playlists(session)
+
+        sp = await self.owner_client().get_client()
+        playlist_id = await spotify_playlist.create_playlist(sp, display_name)
+
+        hue = PLAYLIST_HUES[len(existing) % len(PLAYLIST_HUES)]
+        async with self.session_factory() as session:
+            row = await repos.add_genre_playlist(
+                session,
+                genre_key=genre_key,
+                playlist_id=playlist_id,
+                display_name=display_name,
+                emoji="🎵",
+                crew_id=self.default_crew_id,
+                hue=hue,
+            )
+            await repos.add_genre_alias(session, alias=display_name, genre_key=genre_key)
+        logger.info("playlist.created", genre=genre_key, hue=hue)
+        return row
+
+    async def source_states(self) -> list[dict[str, object]]:
+        """Per-source availability and the quality each delivers.
+
+        Checked in preference order and concurrently: the UI polls this every
+        few seconds, and a dead daemon must not make the others wait.
+        """
+        names = [n for n in SOURCE_PREFERENCE if n in self.sources]
+        names += [n for n in self.sources if n not in names]
+
+        async def probe(name: str) -> bool:
+            try:
+                return await self.sources[name].healthy()
+            except Exception:
+                # An exploding probe means unusable, not a broken endpoint.
+                logger.debug("source.health_check_failed", source=name)
+                return False
+
+        results = await asyncio.gather(*(probe(n) for n in names))
+        return [
+            {"name": name, "up": up, "quality": self.sources[name].quality}
+            for name, up in zip(names, results, strict=True)
+        ]
 
     def playlist_download_running(self, playlist_db_id: int) -> bool:
         """Whether a batch download for this playlist is still in flight."""

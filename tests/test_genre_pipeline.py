@@ -52,6 +52,9 @@ async def test_resolves_and_persists_genre(
     assert stored is not None
     assert stored.detected_genre == "hardgroove"
     assert stored.genre_source == "discogs"
+    # The Discogs label rides along: for techno it identifies the genre faster
+    # than anything else on the row, so the library shows it.
+    assert stored.record_label == "PR"
 
 
 async def test_manual_result_is_persisted_too(

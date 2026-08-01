@@ -36,6 +36,7 @@ class BandcampSource(MusicSource):
     """Scrapes free/name-your-price Bandcamp releases for lossless downloads."""
 
     name = "bandcamp"
+    quality = "flac"
 
     def __init__(
         self,

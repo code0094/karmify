@@ -14,7 +14,7 @@ import structlog
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from spotipy.exceptions import SpotifyException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -48,6 +48,7 @@ class TrackOut(BaseModel):
     download_path: str | None
     download_started_at: datetime | None
     last_download_error: str | None
+    record_label: str | None
 
 
 class PlaylistOut(BaseModel):
@@ -58,6 +59,7 @@ class PlaylistOut(BaseModel):
     playlist_id: str
     display_name: str
     emoji: str
+    hue: str | None = None
     # Download progress (derived in repos.playlist_download_stats).
     total_tracks: int = 0
     downloaded: int = 0
@@ -75,6 +77,18 @@ class CrewMemberOut(BaseModel):
 class CrewOut(BaseModel):
     name: str | None
     members: list[CrewMemberOut]
+
+
+class CreatePlaylistBody(BaseModel):
+    display_name: str = Field(min_length=1)
+
+    @field_validator("display_name")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        """A whitespace-only name would create an unnameable playlist."""
+        if not v.strip():
+            raise ValueError("display_name must not be blank")
+        return v.strip()
 
 
 class AssignBody(BaseModel):
@@ -212,7 +226,18 @@ def create_app(context: AppContext) -> FastAPI:
 
     @app.get("/health")
     async def health(ctx: AppContext = Depends(get_context)) -> dict[str, object]:
-        return {"status": "ok", "sources": list(ctx.sources)}
+        """Liveness probe plus per-source availability.
+
+        Source probes must never make this fail: Electron waits on it to open
+        the window, and the desktop app polls it to warn that downloads have
+        silently degraded to a worse format.
+        """
+        try:
+            sources = await ctx.source_states()
+        except Exception:
+            logger.warning("sidecar.source_states_failed", exc_info=True)
+            sources = []
+        return {"status": "ok", "sources": sources}
 
     @app.get("/auth/spotify/login")
     async def spotify_login(
@@ -312,6 +337,7 @@ def create_app(context: AppContext) -> FastAPI:
                     playlist_id=p.playlist_id,
                     display_name=p.display_name,
                     emoji=p.emoji,
+                    hue=p.hue,
                     total_tracks=s.total,
                     downloaded=s.downloaded,
                     downloading=s.downloading,
@@ -319,6 +345,21 @@ def create_app(context: AppContext) -> FastAPI:
                 )
             )
         return out
+
+    @app.post("/playlists", status_code=201, response_model=PlaylistOut)
+    async def create_playlist(
+        body: CreatePlaylistBody,
+        ctx: AppContext = Depends(get_context),
+    ) -> PlaylistOut:
+        """Create one genre playlist — the app's only path to a new genre."""
+        try:
+            row = await ctx.create_playlist(body.display_name)
+        except NotAuthorizedError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except SourceError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Brand new: no tracks yet, so the progress fields keep their zeros.
+        return PlaylistOut.model_validate(row)
 
     @app.post("/playlists/init")
     async def init_playlists(ctx: AppContext = Depends(get_context)) -> dict[str, int]:

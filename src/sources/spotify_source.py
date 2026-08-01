@@ -25,6 +25,7 @@ class SpotifySource(MusicSource):
     """Searches Spotify's catalog and downloads audio through the zotify wrapper."""
 
     name = "spotify"
+    quality = "mp3 320"
 
     def __init__(
         self,
@@ -33,6 +34,15 @@ class SpotifySource(MusicSource):
     ) -> None:
         self._downloader = downloader
         self._get_sp = get_sp
+
+    async def healthy(self) -> bool:
+        """Usable only while the crew owner's OAuth still works."""
+        try:
+            await self._get_sp()
+        except Exception:
+            logger.debug("source.spotify.unhealthy")
+            return False
+        return True
 
     async def search(self, query: str, *, limit: int = 20) -> list[SearchResult]:
         sp = await self._get_sp()

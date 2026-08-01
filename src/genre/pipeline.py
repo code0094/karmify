@@ -50,6 +50,7 @@ async def resolve_and_store_genre(
             .values(
                 detected_genre=genre_result.genre_key,
                 genre_source=genre_result.source,
+                record_label=genre_result.label,
             )
         )
         await session.commit()

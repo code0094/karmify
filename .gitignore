@@ -19,3 +19,6 @@ electron/dist/
 # Downloaded audio + local DJ library (root-level only — not src/library/ code)
 /downloads/
 /library/
+
+# Playwright MCP scratch output
+.playwright-mcp/

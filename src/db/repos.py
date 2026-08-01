@@ -146,6 +146,7 @@ async def add_genre_playlist(
     display_name: str,
     emoji: str,
     crew_id: int | None = None,
+    hue: str | None = None,
 ) -> GenrePlaylist:
     """Register a genre playlist (created on Spotify beforehand)."""
     row = GenrePlaylist(
@@ -154,6 +155,7 @@ async def add_genre_playlist(
         display_name=display_name,
         emoji=emoji,
         crew_id=crew_id,
+        hue=hue,
     )
     session.add(row)
     await session.commit()

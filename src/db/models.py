@@ -84,6 +84,9 @@ class GenrePlaylist(Base):
     emoji: Mapped[str] = mapped_column(String(10), default="🎵")
     #: Which crew shares this playlist; NULL only before the first bootstrap.
     crew_id: Mapped[int | None] = mapped_column()
+    #: Colour identifying the playlist across the UI (replaces the emoji there).
+    #: Stored, not derived — a colour that moved between runs would be useless.
+    hue: Mapped[str | None] = mapped_column(String(20))
 
 
 class LikedTrack(Base):
@@ -99,6 +102,9 @@ class LikedTrack(Base):
     liked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     detected_genre: Mapped[str | None] = mapped_column(String(100))
     genre_source: Mapped[str | None] = mapped_column(String(20))
+    #: Record label from Discogs. For techno it identifies the genre faster than
+    #: anything else, so the inbox shows it next to the title.
+    record_label: Mapped[str | None] = mapped_column(String(200))
     assigned_playlist_id: Mapped[str | None] = mapped_column(String(255))
     assigned_by: Mapped[str | None] = mapped_column(String(50))
     assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

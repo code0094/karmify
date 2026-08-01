@@ -225,6 +225,136 @@ async def test_download_liked_track_refused_when_claim_lost(
         await ctx.download_liked_track(7)
 
 
+# ---- creating a playlist from the app --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_playlist_persists_with_a_hue(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    db_session_factory: object,
+) -> None:
+    ctx = AppContext(make_settings())
+    ctx.session_factory = db_session_factory  # type: ignore[assignment]
+    client = MagicMock()
+    client.get_client = AsyncMock(return_value=object())
+    ctx.spotify_clients = {"karma": client}
+    ctx.owner_label = "karma"
+    ctx.default_crew_id = 3
+    monkeypatch.setattr(
+        ctxmod.spotify_playlist, "create_playlist", AsyncMock(return_value="pl_spotify")
+    )
+
+    row = await ctx.create_playlist("Hard Techno")
+
+    assert row.playlist_id == "pl_spotify"
+    assert row.genre_key == "hard techno"  # the mapper matches lowercased
+    assert row.crew_id == 3
+    assert row.hue in ctxmod.PLAYLIST_HUES
+    # The name itself becomes an alias, so the resolver can hit the new genre.
+    async with ctx.session_factory() as session:  # type: ignore[operator]
+        assert await ctxmod.repos.find_genre_key(session, "Hard Techno") == "hard techno"
+
+
+@pytest.mark.asyncio
+async def test_created_playlists_cycle_through_the_hues(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    db_session_factory: object,
+) -> None:
+    """Hues are persisted and handed out round-robin — two playlists differ."""
+    ctx = AppContext(make_settings())
+    ctx.session_factory = db_session_factory  # type: ignore[assignment]
+    client = MagicMock()
+    client.get_client = AsyncMock(return_value=object())
+    ctx.spotify_clients = {"karma": client}
+    ctx.owner_label = "karma"
+    monkeypatch.setattr(
+        ctxmod.spotify_playlist,
+        "create_playlist",
+        AsyncMock(side_effect=lambda _sp, name: f"pl_{name}"),
+    )
+
+    first = await ctx.create_playlist("One")
+    second = await ctx.create_playlist("Two")
+
+    assert first.hue != second.hue
+
+
+@pytest.mark.asyncio
+async def test_create_playlist_rejects_an_existing_genre(
+    make_settings: Callable[..., Settings],
+    monkeypatch: pytest.MonkeyPatch,
+    db_session_factory: object,
+) -> None:
+    ctx = AppContext(make_settings())
+    ctx.session_factory = db_session_factory  # type: ignore[assignment]
+    client = MagicMock()
+    client.get_client = AsyncMock(return_value=object())
+    ctx.spotify_clients = {"karma": client}
+    ctx.owner_label = "karma"
+    create = AsyncMock(return_value="pl_x")
+    monkeypatch.setattr(ctxmod.spotify_playlist, "create_playlist", create)
+
+    await ctx.create_playlist("Acid")
+    create.reset_mock()
+
+    with pytest.raises(SourceError, match="уже есть"):
+        await ctx.create_playlist("acid")
+    create.assert_not_awaited()  # no orphan playlist left on Spotify
+
+
+# ---- source health ---------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_source_states_report_health_and_quality(
+    make_settings: Callable[..., Settings],
+) -> None:
+    ctx = AppContext(make_settings())
+
+    class Healthy(FakeSource):
+        name = "soulseek"
+        quality = "flac и выше"
+
+        async def healthy(self) -> bool:
+            return True
+
+    class Down(FakeSource):
+        name = "spotify"
+        quality = "mp3 320"
+
+        async def healthy(self) -> bool:
+            return False
+
+    ctx.sources = {"soulseek": Healthy(), "spotify": Down()}
+
+    states = await ctx.source_states()
+
+    assert states == [
+        {"name": "soulseek", "up": True, "quality": "flac и выше"},
+        {"name": "spotify", "up": False, "quality": "mp3 320"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_health_check_failure_reads_as_down(
+    make_settings: Callable[..., Settings],
+) -> None:
+    """A health probe that raises means the source is unusable, not a 500."""
+    ctx = AppContext(make_settings())
+
+    class Exploding(FakeSource):
+        name = "soulseek"
+
+        async def healthy(self) -> bool:
+            raise ConnectionError("refused")
+
+    ctx.sources = {"soulseek": Exploding()}
+
+    assert (await ctx.source_states())[0]["up"] is False
+
+
 # ---- playlist batch download ----------------------------------------------
 
 

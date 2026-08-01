@@ -34,6 +34,7 @@ class SoulseekSource(MusicSource):
     """Searches and downloads from Soulseek through a slskd daemon."""
 
     name = "soulseek"
+    quality = "flac и выше"
 
     def __init__(
         self,
@@ -57,6 +58,15 @@ class SoulseekSource(MusicSource):
         import slskd_api
 
         return slskd_api.SlskdClient(host=self._url, api_key=self._api_key)
+
+    async def healthy(self) -> bool:
+        """Whether the slskd daemon answers — no daemon, no Soulseek."""
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._client), timeout=5)
+        except Exception:
+            logger.debug("source.soulseek.unhealthy", url=self._url)
+            return False
+        return True
 
     async def search(self, query: str, *, limit: int = 20) -> list[SearchResult]:
         try:
