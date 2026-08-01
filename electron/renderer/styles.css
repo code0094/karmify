@@ -42,9 +42,10 @@
   --text-dim: var(--ink-300);
   --text-err: var(--red-500);
 
-  /* Type */
-  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
-  --font-text: "Inter Tight", "Segoe UI", system-ui, sans-serif;
+  /* Type — the platform's own UI face. The design system proposed Bricolage
+     Grotesque + Inter Tight; rejected, so nothing is downloaded or bundled. */
+  --font-display: "Segoe UI", system-ui, sans-serif;
+  --font-text: "Segoe UI", system-ui, sans-serif;
   --text-3xs: 10px;
   --text-2xs: 11px;
   --text-xs: 12px;
