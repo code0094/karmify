@@ -1,13 +1,14 @@
-"""Record label on tracks, colour hue on playlists
+"""Record label and download source on tracks, colour hue on playlists
 
 Revision ID: 0006
 Revises: 0005
 Create Date: 2026-08-01
 
-Both feed the redesigned desktop UI: the inbox shows the Discogs label (for
-techno it identifies the genre faster than the title does), and every playlist
-carries a colour instead of an emoji. The hue is stored rather than derived —
-a colour that changed between runs would carry no meaning.
+All three feed the redesigned desktop UI: the inbox shows the Discogs label
+(for techno it identifies the genre faster than the title does), the library
+shows which source actually delivered each file, and every playlist carries a
+colour instead of an emoji. The hue is stored rather than derived — a colour
+that changed between runs would carry no meaning.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ _SEEDED_HUES = {
 
 def upgrade() -> None:
     op.add_column("liked_tracks", sa.Column("record_label", sa.String(200), nullable=True))
+    op.add_column("liked_tracks", sa.Column("download_source", sa.String(20), nullable=True))
     op.add_column("genre_playlists", sa.Column("hue", sa.String(20), nullable=True))
 
     playlists = sa.table(
@@ -47,4 +49,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column("genre_playlists", "hue")
+    op.drop_column("liked_tracks", "download_source")
     op.drop_column("liked_tracks", "record_label")

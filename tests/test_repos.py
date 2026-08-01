@@ -283,11 +283,16 @@ async def test_get_track_for_update_returns_row(db_session: AsyncSession) -> Non
 async def test_mark_track_downloaded(db_session: AsyncSession) -> None:
     track = await repos.insert_liked_track(db_session, _track())
 
-    await repos.mark_track_downloaded(db_session, track.id, "C:/lib/akephale.mp3")
+    await repos.mark_track_downloaded(
+        db_session, track.id, "C:/lib/akephale.mp3", source="soulseek"
+    )
 
     await db_session.refresh(track)
     assert track.downloaded_at is not None
     assert track.download_path == "C:/lib/akephale.mp3"
+    # Which source won matters after the fact: a track that fell through to
+    # Spotify's 320 is a candidate for re-pulling in lossless later.
+    assert track.download_source == "soulseek"
 
     undownloaded = await repos.list_tracks(db_session, only_undownloaded=True)
     assert undownloaded == []

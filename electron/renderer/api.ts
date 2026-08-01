@@ -1,4 +1,4 @@
-import type { Crew, Playlist, SearchResult, Track, TrackFilters } from "./types";
+import type { Crew, Playlist, SearchResult, SourceState, Track, TrackFilters } from "./types";
 
 export interface PreviewHit {
   previewUrl: string;
@@ -52,6 +52,9 @@ export const api = {
   crew(): Promise<Crew> {
     return request<Crew>("GET", "/crew");
   },
+  health(): Promise<{ status: string; sources: SourceState[] }> {
+    return request("GET", "/health");
+  },
   listTracks(filters: TrackFilters = {}): Promise<Track[]> {
     const params = new URLSearchParams();
     if (filters.genre) params.set("genre", filters.genre);
@@ -74,6 +77,9 @@ export const api = {
   },
   initPlaylists(): Promise<{ created: number; skipped: number }> {
     return request("POST", "/playlists/init");
+  },
+  createPlaylist(displayName: string): Promise<Playlist> {
+    return request("POST", "/playlists", { display_name: displayName });
   },
   search(query: string, source = "spotify", limit = 20): Promise<SearchResult[]> {
     return request("POST", "/sources/search", { query, source, limit });

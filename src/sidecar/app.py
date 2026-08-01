@@ -46,6 +46,7 @@ class TrackOut(BaseModel):
     assigned_playlist_id: str | None
     downloaded_at: datetime | None
     download_path: str | None
+    download_source: str | None
     download_started_at: datetime | None
     last_download_error: str | None
     record_label: str | None

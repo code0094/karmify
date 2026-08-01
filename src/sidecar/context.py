@@ -219,7 +219,7 @@ class AppContext:
             await asyncio.to_thread(self.library.add, path, subdir=track.detected_genre)
 
             async with self.session_factory() as session:
-                await repos.mark_track_downloaded(session, track_id, str(path))
+                await repos.mark_track_downloaded(session, track_id, str(path), source=source)
         except BaseException:
             # Release the claim so a retry is possible (mark_track_downloaded
             # clears it on the success path).

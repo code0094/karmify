@@ -122,7 +122,7 @@ async def test_download_liked_track_lands_in_genre_subdir(
 
     assert fake.downloads[0].download_ref == "t1"
     ctx.library.add.assert_called_once_with(path, subdir="hardgroove")
-    mark.assert_awaited_once_with(ANY, 7, str(path))
+    mark.assert_awaited_once_with(ANY, 7, str(path), source="spotify")
 
 
 @pytest.mark.asyncio

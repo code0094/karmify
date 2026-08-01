@@ -319,7 +319,9 @@ async def release_download(session: AsyncSession, track_id: int) -> None:
     await session.commit()
 
 
-async def mark_track_downloaded(session: AsyncSession, track_id: int, download_path: str) -> None:
+async def mark_track_downloaded(
+    session: AsyncSession, track_id: int, download_path: str, *, source: str | None = None
+) -> None:
     """Record that a track's audio has been downloaded to a local path."""
     stmt = (
         update(LikedTrack)
@@ -327,6 +329,7 @@ async def mark_track_downloaded(session: AsyncSession, track_id: int, download_p
         .values(
             downloaded_at=datetime.now().astimezone(),
             download_path=download_path,
+            download_source=source,
             download_started_at=None,
             last_download_error=None,  # success wipes the stale failure
         )

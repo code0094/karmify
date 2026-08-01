@@ -1,60 +1,33 @@
+import { Download, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { PushToast } from "../components/Toast";
-import type { SearchResult } from "../types";
+import { FormatBadge, humanDuration, humanSize } from "../components/primitives";
+import type { SearchResult, SourceState } from "../types";
 
 interface SearchViewProps {
-  sources: string[];
+  sources: SourceState[];
   push: PushToast;
 }
 
-// Lossless-capable sources first — same preference the backend downloads with.
-const SOURCE_ORDER = ["soulseek", "bandcamp", "spotify"];
-
-function orderSources(sources: string[]): string[] {
-  const rank = (s: string) => {
-    const i = SOURCE_ORDER.indexOf(s);
-    return i === -1 ? SOURCE_ORDER.length : i;
-  };
-  return [...sources].sort((a, b) => rank(a) - rank(b));
-}
-
-const LOSSLESS = new Set(["flac", "wav", "aiff", "aif", "alac"]);
-
-function QualityBadge({ result }: { result: SearchResult }) {
-  const fmt = (result.audio_format ?? "").toLowerCase();
-  if (!fmt) return <span className="dim">?</span>;
-  return (
-    <span className={LOSSLESS.has(fmt) ? "fmt fmt-lossless" : "fmt"}>
-      {fmt}
-      {result.bitrate ? ` ${result.bitrate}` : ""}
-    </span>
-  );
-}
-
-function mb(size: number | null | undefined): string {
-  return size ? `${(size / 1048576).toFixed(1)} МБ` : "";
-}
-
-function mmss(sec: number | null | undefined): string {
-  if (!sec) return "";
-  const m = Math.floor(sec / 60);
-  const s = String(Math.floor(sec % 60)).padStart(2, "0");
-  return `${m}:${s}`;
-}
+const COLUMNS = "1fr 130px 100px 80px 44px";
 
 export function SearchView({ sources, push }: SearchViewProps) {
-  const ordered = orderSources(sources);
   const [query, setQuery] = useState("");
-  const [source, setSource] = useState(ordered[0] ?? "");
+  const [source, setSource] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
 
-  // Sources arrive async from /health — pick the best one once they do.
+  // Source health lives above this view. When the selected one goes down the
+  // selection has to fall back to the best live source in the same render.
   useEffect(() => {
-    if (!source && ordered.length > 0) setSource(ordered[0]);
-  }, [ordered, source]);
+    const live = sources.filter((s) => s.up);
+    const current = sources.find((s) => s.name === source);
+    if (!current || !current.up) setSource(live[0]?.name ?? null);
+  }, [sources, source]);
+
+  const selected = sources.find((s) => s.name === source);
 
   async function go() {
     if (!query.trim() || !source) return;
@@ -73,8 +46,7 @@ export function SearchView({ sources, push }: SearchViewProps) {
     push("info", `Качаю: ${result.artist} — ${result.title}`);
     try {
       const r = await api.downloadResult(result);
-      const name = r.path.split(/[\\/]/).pop() ?? r.path;
-      push("success", `Скачано: ${name}`);
+      push("success", `Скачано: ${r.path.split(/[\\/]/).pop() ?? r.path}`);
     } catch (err) {
       push("error", `Не скачалось: ${String(err)}`);
     } finally {
@@ -87,26 +59,50 @@ export function SearchView({ sources, push }: SearchViewProps) {
   }
 
   return (
-    <div>
-      <div className="library-toolbar">
-        <input
-          type="text"
-          style={{ flex: 1 }}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && go()}
-          placeholder="Артист, трек…"
-        />
-        <select value={source} onChange={(e) => setSource(e.target.value)}>
-          {ordered.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <button className="btn btn-accent" onClick={go} disabled={busy || !query.trim()}>
-          {busy ? "Ищу…" : "Найти"}
-        </button>
+    <div className="view">
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "22px 26px 0" }}>
+        <div style={{ display: "flex", gap: 10 }}>
+          <label className="field" style={{ flex: 1 }}>
+            <Search size={15} strokeWidth={1.75} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && go()}
+              placeholder="Артист, трек…"
+            />
+          </label>
+          <button
+            className="btn btn-accent btn-field"
+            onClick={go}
+            disabled={busy || !query.trim() || !source}
+          >
+            {busy ? "Ищу…" : "Найти"}
+          </button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="label-caps">Где искать</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            {sources.map((s) => {
+              const classes = ["source-pick"];
+              if (s.name === source) classes.push("selected");
+              if (!s.up) classes.push("down");
+              return (
+                <button
+                  key={s.name}
+                  className={classes.join(" ")}
+                  disabled={!s.up}
+                  onClick={() => setSource(s.name)}
+                  title={s.up ? `Качество: ${s.quality}` : `${s.name} не отвечает`}
+                >
+                  <span className={s.up ? "dot up" : "dot down"} />
+                  <span className="name">{s.name}</span>
+                  <span className="quality">{s.up ? s.quality : "не отвечает"}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {results === null ? (
@@ -119,45 +115,57 @@ export function SearchView({ sources, push }: SearchViewProps) {
         </div>
       ) : results.length === 0 ? (
         <div className="empty">
-          <h3>Ничего не нашлось</h3>
-          <p>Попробуй короче: только артист или только название, без ремиксов и скобок.</p>
+          <h3>
+            {selected && !selected.up
+              ? `${selected.name} не отвечает`
+              : `Ничего не нашлось в ${source}`}
+          </h3>
+          <p>
+            {selected && !selected.up
+              ? "Выбери другой источник — lossless остался в bandcamp."
+              : "Попробуй короче: только артист или только название, без ремиксов и скобок."}
+          </p>
         </div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Трек</th>
-              <th>Качество</th>
-              <th>Размер</th>
-              <th>Длина</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {results.map((r, i) => (
-              <tr key={`${r.download_ref}-${i}`}>
-                <td>
-                  <strong>{r.artist}</strong> — {r.title}
-                  <span className="dim"> · {r.source}</span>
-                </td>
-                <td>
-                  <QualityBadge result={r} />
-                </td>
-                <td className="dim">{mb(r.size_bytes)}</td>
-                <td className="dim">{mmss(r.duration_sec)}</td>
-                <td>
-                  <button
-                    className="btn"
-                    disabled={downloading.has(r.download_ref)}
-                    onClick={() => download(r)}
-                  >
-                    {downloading.has(r.download_ref) ? "⏳" : "⬇"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={{ marginTop: 16 }}>
+          <div className="thead" style={{ gridTemplateColumns: COLUMNS }}>
+            <span className="label-caps">Трек</span>
+            <span className="label-caps">Качество</span>
+            <span className="label-caps">Размер</span>
+            <span className="label-caps">Длина</span>
+            <span />
+          </div>
+
+          {results.map((r, i) => (
+            <div
+              key={`${r.download_ref}-${i}`}
+              className="trow compact"
+              style={{ gridTemplateColumns: COLUMNS }}
+            >
+              <div className="title-cell">
+                <span className="artist">{r.artist}</span>
+                <span className="track">{r.title}</span>
+              </div>
+              <span>
+                {r.audio_format ? (
+                  <FormatBadge format={r.audio_format} bitrate={r.bitrate} />
+                ) : (
+                  <span className="dim">?</span>
+                )}
+              </span>
+              <span className="meta-cell num">{humanSize(r.size_bytes)}</span>
+              <span className="meta-cell num">{humanDuration(r.duration_sec)}</span>
+              <button
+                className="icon-btn"
+                disabled={downloading.has(r.download_ref)}
+                onClick={() => download(r)}
+                title="Скачать"
+              >
+                <Download size={12} strokeWidth={1.75} />
+              </button>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

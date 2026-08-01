@@ -111,6 +111,9 @@ class LikedTrack(Base):
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     downloaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     download_path: Mapped[str | None] = mapped_column(String(1000))
+    #: Which source actually delivered the file. A track that fell through to
+    #: Spotify's 320 kbps is a candidate for re-pulling in lossless later.
+    download_source: Mapped[str | None] = mapped_column(String(20))
     #: Set while a download is in flight — the cross-process single-flight claim
     #: (the bot and the sidecar are separate processes on one database).
     download_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
